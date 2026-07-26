@@ -10,9 +10,14 @@ export class GoogleDriveSync {
   constructor() {
     this.clientId = localStorage.getItem('gdrive_client_id') || '';
     this.accessToken = localStorage.getItem('gdrive_access_token') || '';
-    this.fileId = localStorage.getItem('gdrive_file_id') || '';
+    const savedFileId = localStorage.getItem('gdrive_file_id');
+    this.fileId = this.isValidFileId(savedFileId) ? savedFileId : '';
     this.tokenClient = null;
-    this.isAuthorized = false;
+    this.isAuthorized = Boolean(this.accessToken);
+  }
+
+  isValidFileId(id) {
+    return Boolean(id && id !== 'undefined' && id !== 'null' && typeof id === 'string' && id.trim() !== '');
   }
 
   setClientId(id) {
@@ -73,32 +78,53 @@ export class GoogleDriveSync {
       }
     );
 
-    const result = await response.json();
-    if (result.files && result.files.length > 0) {
-      this.fileId = result.files[0].id;
-      localStorage.setItem('gdrive_file_id', this.fileId);
-      return this.fileId;
+    if (response.status === 401) {
+      this.accessToken = '';
+      localStorage.removeItem('gdrive_access_token');
+      throw new Error('Google Driveの認証期限が切れました。再度ログインしてください。');
     }
 
-    // 2. File not found, create new empty JSON file
-    const metadata = {
-      name: DRIVE_FILE_NAME,
-      mimeType: 'application/json',
-    };
+    if (response.ok) {
+      const result = await response.json();
+      if (result.files && result.files.length > 0 && this.isValidFileId(result.files[0].id)) {
+        this.fileId = result.files[0].id;
+        localStorage.setItem('gdrive_file_id', this.fileId);
+        return this.fileId;
+      }
+    }
 
+    // 2. File not found on Drive, create new JSON file metadata
     const createRes = await fetch(
-      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      'https://www.googleapis.com/drive/v3/files?fields=id',
       {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.accessToken}`,
-          'Content-Type': 'multipart/related; boundary=foo_bar_baz'
+          'Content-Type': 'application/json'
         },
-        body: `--foo_bar_baz\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--foo_bar_baz\r\nContent-Type: application/json\r\n\r\n{}\r\n--foo_bar_baz--`
+        body: JSON.stringify({
+          name: DRIVE_FILE_NAME,
+          mimeType: 'application/json',
+        })
       }
     );
 
+    if (createRes.status === 401) {
+      this.accessToken = '';
+      localStorage.removeItem('gdrive_access_token');
+      throw new Error('Google Driveの認証期限が切れました。再度ログインしてください。');
+    }
+
+    if (!createRes.ok) {
+      const errText = await createRes.text();
+      throw new Error(`Google Driveへのファイル作成に失敗しました: ${errText}`);
+    }
+
     const createdFile = await createRes.json();
+    if (!createdFile || !this.isValidFileId(createdFile.id)) {
+      throw new Error('Google Driveの新規ファイルID取得に失敗しました。');
+    }
+
     this.fileId = createdFile.id;
     localStorage.setItem('gdrive_file_id', this.fileId);
     return this.fileId;
@@ -112,12 +138,12 @@ export class GoogleDriveSync {
       throw new Error('Google Driveに接続されていません。');
     }
 
-    if (!this.fileId) {
+    if (!this.isValidFileId(this.fileId)) {
       await this.findOrCreateDriveFile();
     }
 
     const payload = JSON.stringify(data, null, 2);
-    const updateRes = await fetch(
+    let updateRes = await fetch(
       `https://www.googleapis.com/upload/drive/v3/files/${this.fileId}?uploadType=media`,
       {
         method: 'PATCH',
@@ -128,6 +154,38 @@ export class GoogleDriveSync {
         body: payload
       }
     );
+
+    if (updateRes.status === 401) {
+      this.accessToken = '';
+      localStorage.removeItem('gdrive_access_token');
+      throw new Error('Google Driveの認証期限が切れました。再度ログインしてください。');
+    }
+
+    // Handle 404 (File not found / undefined fileId on Drive) -> recreate file & retry save once
+    if (updateRes.status === 404) {
+      console.warn('Google Drive上のファイルが見つかりません(404)。新規ファイルを作成して再保存します...');
+      localStorage.removeItem('gdrive_file_id');
+      this.fileId = '';
+      await this.findOrCreateDriveFile();
+
+      updateRes = await fetch(
+        `https://www.googleapis.com/upload/drive/v3/files/${this.fileId}?uploadType=media`,
+        {
+          method: 'PATCH',
+          headers: {
+            Authorization: `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          body: payload
+        }
+      );
+
+      if (updateRes.status === 401) {
+        this.accessToken = '';
+        localStorage.removeItem('gdrive_access_token');
+        throw new Error('Google Driveの認証期限が切れました。再度ログインしてください。');
+      }
+    }
 
     if (!updateRes.ok) {
       const errText = await updateRes.text();
@@ -145,16 +203,42 @@ export class GoogleDriveSync {
       throw new Error('Google Driveに接続されていません。');
     }
 
-    if (!this.fileId) {
+    if (!this.isValidFileId(this.fileId)) {
       await this.findOrCreateDriveFile();
     }
 
-    const downloadRes = await fetch(
+    let downloadRes = await fetch(
       `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`,
       {
         headers: { Authorization: `Bearer ${this.accessToken}` }
       }
     );
+
+    if (downloadRes.status === 401) {
+      this.accessToken = '';
+      localStorage.removeItem('gdrive_access_token');
+      throw new Error('Google Driveの認証期限が切れました。再度ログインしてください。');
+    }
+
+    if (downloadRes.status === 404) {
+      console.warn('Google Drive上のファイルが見つかりません(404)。新規ファイルを作成して再試行します...');
+      localStorage.removeItem('gdrive_file_id');
+      this.fileId = '';
+      await this.findOrCreateDriveFile();
+
+      downloadRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`,
+        {
+          headers: { Authorization: `Bearer ${this.accessToken}` }
+        }
+      );
+
+      if (downloadRes.status === 401) {
+        this.accessToken = '';
+        localStorage.removeItem('gdrive_access_token');
+        throw new Error('Google Driveの認証期限が切れました。再度ログインしてください。');
+      }
+    }
 
     if (!downloadRes.ok) {
       throw new Error('Google Driveからのデータ読み込みに失敗しました。');
