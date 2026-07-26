@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>献立＆スーパー別買い物リスト | Weekly Dinner Planner</title>
+  
+  <!-- PWA Meta Tags -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#e11d48">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3405/3405771.png">
+
+  <!-- Google Fonts & Icons -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&display=swap" rel="stylesheet">
+  
+  <link rel="stylesheet" href="styles.css">
+  
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- Google Identity Services (GIS) SDK -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+
+  <div class="app-container">
+    
+    <!-- Top Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">
+          <i data-lucide="utensils"></i>
+        </div>
+        <div class="brand-title">献立＆買い物ノート</div>
+      </div>
+      <div class="header-actions">
+        <div id="sync-status" class="sync-status-badge offline">
+          <i data-lucide="cloud" style="width:14px;height:14px;"></i>
+          <span id="sync-status-text">ローカル保存</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Dynamic Pages -->
+    <main class="main-content">
+
+      <!-- PAGE 1: Weekly Dinner Planner -->
+      <section id="page-planner" class="page active">
+        <div class="section-title-row">
+          <div class="section-title">
+            <i data-lucide="calendar-range" style="color:var(--accent-rose);"></i>
+            今週のディナー献立
+          </div>
+          <button id="archive-current-plan-btn" class="btn btn-primary btn-sm">
+            <i data-lucide="bookmark-plus" style="width:14px;height:14px;"></i>
+            履歴に保存
+          </button>
+        </div>
+
+        <div style="display:flex;justify-content:center;margin-bottom:16px;">
+          <div class="date-navigator">
+            <i data-lucide="calendar" style="width:16px;height:16px;color:var(--accent-rose);"></i>
+            <span id="planner-date-range" class="date-text">2026/7/27 (月) 〜 8/2 (日)</span>
+          </div>
+        </div>
+
+        <!-- Weekly Dinner Cards Container -->
+        <div id="planner-cards-container"></div>
+      </section>
+
+
+      <!-- PAGE 2: Supermarket Shopping List -->
+      <section id="page-shopping" class="page">
+        <div class="section-title-row">
+          <div class="section-title">
+            <i data-lucide="shopping-cart" style="color:var(--accent-rose);"></i>
+            スーパー別 買い物リスト
+          </div>
+          <button id="clear-checked-items-btn" class="btn btn-secondary btn-sm">
+            <i data-lucide="check-check" style="width:14px;height:14px;"></i>
+            チェック済を整理
+          </button>
+        </div>
+
+        <!-- Horizontal Store Filter Chips -->
+        <div id="store-filter-bar" class="store-filter-bar"></div>
+
+        <!-- Store-grouped Items -->
+        <div id="shopping-list-container"></div>
+      </section>
+
+
+      <!-- PAGE 3: History Archive -->
+      <section id="page-history" class="page">
+        <div class="section-title-row">
+          <div class="section-title">
+            <i data-lucide="history" style="color:var(--accent-indigo);"></i>
+            献立の過去履歴アーカイブ
+          </div>
+        </div>
+        <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
+          奥さんが考えてくれた過去の献立記録です。いつでもGoogle Drive経由でAndroid・iPhone両方から参照・復元できます。
+        </p>
+
+        <div id="history-list-container"></div>
+      </section>
+
+
+      <!-- PAGE 4: Settings & Google Drive Sync -->
+      <section id="page-settings" class="page">
+        <div class="section-title-row">
+          <div class="section-title">
+            <i data-lucide="cloud-cog" style="color:var(--accent-emerald);"></i>
+            Google Drive & 設定
+          </div>
+        </div>
+
+        <!-- Google Drive Card -->
+        <div class="history-card" style="margin-bottom:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <i data-lucide="folder-cloud" style="width:24px;height:24px;color:#34d399;"></i>
+            <h3 style="font-size:1.05rem;font-weight:700;">Google Drive 夫婦同期設定</h3>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
+            ご自身のGoogleアカウントで連携することで、ご自身のGoogle Drive内に専用ファイルが作成され、奥様のiPhoneと旦那様のAndroid端末間で献立・買い物リスト・過去履歴が同期されます。
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Google Cloud Client ID</label>
+            <input type="text" id="gdrive-client-id-input" class="form-input" placeholder="例: 1234567890-xxx.apps.googleusercontent.com">
+          </div>
+
+          <button id="gdrive-connect-btn" class="btn btn-primary" style="width:100%;background:linear-gradient(135deg, #10b981 0%, #059669 100%);">
+            <i data-lucide="key-round" style="width:16px;height:16px;"></i>
+            Googleアカウントでログインしてクラウド同期
+          </button>
+        </div>
+
+        <!-- Manual Backup / Restore Card -->
+        <div class="history-card">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <i data-lucide="hard-drive-upload" style="width:24px;height:24px;color:#fb7185;"></i>
+            <h3 style="font-size:1.05rem;font-weight:700;">ファイル直接エクスポート/復元</h3>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
+            Google Drive連携を使用せずに、献立バックアップファイル(JSON)を手動で保存・読み込むことも可能です。
+          </p>
+
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <button id="export-json-btn" class="btn btn-secondary" style="flex:1;">
+              <i data-lucide="download"></i> データ書き出し
+            </button>
+            <label class="btn btn-secondary" style="flex:1;cursor:pointer;">
+              <i data-lucide="upload"></i> データ読み込み
+              <input type="file" id="import-json-input" accept=".json" style="display:none;">
+            </label>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Bottom Navigation Bar for Mobile -->
+    <nav class="bottom-nav">
+      <button class="nav-item active" data-tab="planner">
+        <i data-lucide="calendar"></i>
+        <span>今週の献立</span>
+      </button>
+      <button class="nav-item" data-tab="shopping">
+        <i data-lucide="shopping-bag"></i>
+        <span>買い物リスト</span>
+      </button>
+      <button class="nav-item" data-tab="history">
+        <i data-lucide="history"></i>
+        <span>献立履歴</span>
+      </button>
+      <button class="nav-item" data-tab="settings">
+        <i data-lucide="settings"></i>
+        <span>クラウド設定</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- Edit Day & Ingredients Modal -->
+  <div id="edit-day-modal" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div id="modal-day-title" class="modal-title">月曜日の献立・食材編集</div>
+        <button id="close-modal-btn" class="icon-btn">
+          <i data-lucide="x" style="width:18px;height:18px;"></i>
+        </button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">ディナーのメニュー名</label>
+        <input type="text" id="edit-dish-input" class="form-input" placeholder="例: 特製ハンバーグ & 和風スープ">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">メモ・レシピ案・リクエスト</label>
+        <textarea id="edit-memo-input" class="form-textarea" rows="2" placeholder="例: 玉ねぎは飴色になるまでよく炒める"></textarea>
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <label class="form-label" style="margin-bottom:0;">必要食材と購入スーパー</label>
+        <button id="add-ingredient-row-btn" class="btn btn-secondary btn-sm" style="color:var(--accent-rose);">
+          <i data-lucide="plus" style="width:14px;height:14px;"></i> 食材を追加
+        </button>
+      </div>
+
+      <!-- Ingredient Rows List -->
+      <div id="modal-ingredients-container"></div>
+
+      <div style="margin-top:20px;display:flex;gap:10px;justify-content:flex-end;">
+        <button id="save-modal-btn" class="btn btn-primary" style="width:100%;">
+          <i data-lucide="save"></i> 保存する
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <!-- Main JavaScript App Loader -->
+  <script type="module" src="app.js"></script>
+
+  <!-- PWA Service Worker Registration -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW registration failed', err));
+      });
+    }
+  </script>
+</body>
+</html>

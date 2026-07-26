@@ -1,0 +1,168 @@
+/**
+ * Google Drive API Sync Module for Weekly Dinner & Grocery Planner
+ * Allows saving & syncing weekly menus and grocery archives across devices (iPhone <-> Android)
+ */
+
+const DRIVE_FILE_NAME = 'WeeklyDinnerPlanner_Data.json';
+const DRIVE_SCOPES = 'https://www.googleapis.com/auth/drive.file';
+
+export class GoogleDriveSync {
+  constructor() {
+    this.clientId = localStorage.getItem('gdrive_client_id') || '';
+    this.accessToken = localStorage.getItem('gdrive_access_token') || '';
+    this.fileId = localStorage.getItem('gdrive_file_id') || '';
+    this.tokenClient = null;
+    this.isAuthorized = false;
+  }
+
+  setClientId(id) {
+    this.clientId = id.trim();
+    localStorage.setItem('gdrive_client_id', this.clientId);
+  }
+
+  getClientId() {
+    return this.clientId;
+  }
+
+  // Initialize Google OAuth Token Client using Google Identity Services (GIS)
+  initGoogleAuth(onSuccess, onError) {
+    if (!this.clientId) {
+      if (onError) onError('Google Cloud Client IDが設定されていません');
+      return;
+    }
+
+    if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+      try {
+        this.tokenClient = window.google.accounts.oauth2.initTokenClient({
+          client_id: this.clientId,
+          scope: DRIVE_SCOPES,
+          callback: async (tokenResponse) => {
+            if (tokenResponse.error) {
+              console.error('Google Auth Error:', tokenResponse);
+              if (onError) onError(tokenResponse.error);
+              return;
+            }
+            this.accessToken = tokenResponse.access_token;
+            this.isAuthorized = true;
+            localStorage.setItem('gdrive_access_token', this.accessToken);
+            if (onSuccess) onSuccess(this.accessToken);
+          },
+        });
+        this.tokenClient.requestAccessToken();
+      } catch (err) {
+        console.error('Failed to init token client:', err);
+        if (onError) onError(err.message);
+      }
+    } else {
+      if (onError) onError('Google Identity Services SDKが読み込まれていません');
+    }
+  }
+
+  /**
+   * Search for existing file in Google Drive or create a new one
+   */
+  async findOrCreateDriveFile() {
+    if (!this.accessToken) throw new Error('認証トークンがありません。Googleにログインしてください。');
+
+    // 1. Search for file by name
+    const query = encodeURIComponent(`name = '${DRIVE_FILE_NAME}' and trashed = false`);
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id, name)`,
+      {
+        headers: { Authorization: `Bearer ${this.accessToken}` }
+      }
+    );
+
+    const result = await response.json();
+    if (result.files && result.files.length > 0) {
+      this.fileId = result.files[0].id;
+      localStorage.setItem('gdrive_file_id', this.fileId);
+      return this.fileId;
+    }
+
+    // 2. File not found, create new empty JSON file
+    const metadata = {
+      name: DRIVE_FILE_NAME,
+      mimeType: 'application/json',
+    };
+
+    const createRes = await fetch(
+      'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'Content-Type': 'multipart/related; boundary=foo_bar_baz'
+        },
+        body: `--foo_bar_baz\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--foo_bar_baz\r\nContent-Type: application/json\r\n\r\n{}\r\n--foo_bar_baz--`
+      }
+    );
+
+    const createdFile = await createRes.json();
+    this.fileId = createdFile.id;
+    localStorage.setItem('gdrive_file_id', this.fileId);
+    return this.fileId;
+  }
+
+  /**
+   * Save (Upload) entire app state to Google Drive
+   */
+  async saveToDrive(data) {
+    if (!this.accessToken) {
+      throw new Error('Google Driveに接続されていません。');
+    }
+
+    if (!this.fileId) {
+      await this.findOrCreateDriveFile();
+    }
+
+    const payload = JSON.stringify(data, null, 2);
+    const updateRes = await fetch(
+      `https://www.googleapis.com/upload/drive/v3/files/${this.fileId}?uploadType=media`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        body: payload
+      }
+    );
+
+    if (!updateRes.ok) {
+      const errText = await updateRes.text();
+      throw new Error(`Google Driveへの保存に失敗しました: ${errText}`);
+    }
+
+    return await updateRes.json();
+  }
+
+  /**
+   * Load (Download) data from Google Drive
+   */
+  async loadFromDrive() {
+    if (!this.accessToken) {
+      throw new Error('Google Driveに接続されていません。');
+    }
+
+    if (!this.fileId) {
+      await this.findOrCreateDriveFile();
+    }
+
+    const downloadRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${this.fileId}?alt=media`,
+      {
+        headers: { Authorization: `Bearer ${this.accessToken}` }
+      }
+    );
+
+    if (!downloadRes.ok) {
+      throw new Error('Google Driveからのデータ読み込みに失敗しました。');
+    }
+
+    const data = await downloadRes.json();
+    return data;
+  }
+}
+
+export const driveSync = new GoogleDriveSync();
