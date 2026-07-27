@@ -134,6 +134,18 @@ body {
   letter-spacing: -0.01em;
 }
 
+.version-badge {
+  font-size: 0.68rem;
+  font-weight: 800;
+  background: #ffe4e6;
+  color: #ff4d6d;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  border: 1px solid #fecdd3;
+  line-height: 1;
+  display: inline-block;
+}
+
 .header-actions {
   display: flex;
   align-items: center;
