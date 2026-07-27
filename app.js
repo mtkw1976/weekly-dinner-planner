@@ -34,6 +34,7 @@ const DEFAULT_WEEKLY_PLAN = {
     mon: {
       dish: '特製ハンバーグ & ガルニ',
       memo: '奥さん特製和風おろしソース！子供も大好きなメニュー',
+      rating: 5,
       ingredients: [
         { id: 'i1', name: '合い挽き肉 400g', storeId: 'butcher', checked: false },
         { id: 'i2', name: '玉ねぎ 2個', storeId: 'greengrocer', checked: false },
@@ -44,6 +45,7 @@ const DEFAULT_WEEKLY_PLAN = {
     tue: {
       dish: '鮭の塩焼き & 具だくさん豚汁',
       memo: 'ヘルシー和食の日。ごぼうと豚肉たっぷりで栄養満点',
+      rating: 4,
       ingredients: [
         { id: 'i5', name: '生サーモン切身 4切れ', storeId: 'aeon', checked: false },
         { id: 'i6', name: '豚コマ肉 200g', storeId: 'butcher', checked: false },
@@ -54,6 +56,7 @@ const DEFAULT_WEEKLY_PLAN = {
     wed: {
       dish: '本格キーマカレー & ナン',
       memo: 'スパイスを効かせて食欲UP！カルディのスパイス使用',
+      rating: 5,
       ingredients: [
         { id: 'i9', name: '豚ひき肉 300g', storeId: 'butcher', checked: false },
         { id: 'i10', name: 'カレールー & スパイス', storeId: 'kaldi', checked: false },
@@ -63,6 +66,7 @@ const DEFAULT_WEEKLY_PLAN = {
     thu: {
       dish: '鶏肉と彩り野菜の黒酢あん炒め',
       memo: '酸味がきいてさっぱり美味しいディナー',
+      rating: 4,
       ingredients: [
         { id: 'i12', name: '鶏もも肉 2枚', storeId: 'aeon', checked: false },
         { id: 'i13', name: 'パプリカ (赤・黄)', storeId: 'greengrocer', checked: false },
@@ -73,6 +77,7 @@ const DEFAULT_WEEKLY_PLAN = {
     fri: {
       dish: '海鮮チヂミ & 旨辛キムチ鍋',
       memo: '金曜夜は韓国風料理でパッと賑やかに！ビールと最高',
+      rating: 5,
       ingredients: [
         { id: 'i16', name: 'シーフードミックス', storeId: 'gyomu', checked: false },
         { id: 'i17', name: '白菜キムチ', storeId: 'aeon', checked: false },
@@ -83,6 +88,7 @@ const DEFAULT_WEEKLY_PLAN = {
     sat: {
       dish: '自家製手打ち風パスタ & シーザーサラダ',
       memo: '休日だからちょっと凝ったオリーブオイル系パスタ',
+      rating: 5,
       ingredients: [
         { id: 'i20', name: '生パスタ麺', storeId: 'kaldi', checked: false },
         { id: 'i21', name: '生ハム', storeId: 'kaldi', checked: false },
@@ -93,6 +99,7 @@ const DEFAULT_WEEKLY_PLAN = {
     sun: {
       dish: '黒毛和牛の贅沢すき焼き',
       memo: '1週間の締めくくり！家族みんなで鍋を囲む時間',
+      rating: 5,
       ingredients: [
         { id: 'i24', name: 'すき焼き用牛肉 600g', storeId: 'butcher', checked: false },
         { id: 'i25', name: '長ネギ 2本', storeId: 'greengrocer', checked: false },
@@ -140,6 +147,7 @@ class AppState {
     this.activeTab = 'planner'; // planner, shopping, history, settings
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
+    this.editingModalRating = 5;
   }
 
   saveLocal() {
@@ -269,6 +277,7 @@ function renderPlannerPage() {
         </div>
         
         <div class="menu-title">${escapeHtml(dayData.dish || '（未登録）')}</div>
+        ${renderStarRatingHtml(dayData.rating || 5, dayInfo.key)}
         ${dayData.memo ? `<div class="menu-memo">${escapeHtml(dayData.memo)}</div>` : ''}
 
         <div class="ingredients-list">
@@ -298,6 +307,29 @@ function renderPlannerPage() {
       openEditDayModal(dayKey);
     });
   });
+
+  container.querySelectorAll('.star-rating-display .star').forEach(star => {
+    star.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const dayKey = star.getAttribute('data-day');
+      const starValue = parseInt(star.getAttribute('data-star'));
+      if (dayKey && state.currentPlan.days[dayKey]) {
+        state.currentPlan.days[dayKey].rating = starValue;
+        state.saveLocal();
+        renderPlannerPage();
+        showToast(`${starValue}つ星に評価しました！⭐`);
+      }
+    });
+  });
+}
+
+function renderStarRatingHtml(rating = 5, dayKey = '') {
+  let starsHtml = '';
+  for (let i = 1; i <= 5; i++) {
+    const isFilled = i <= rating;
+    starsHtml += `<span class="star ${isFilled ? 'filled' : ''}" data-day="${dayKey}" data-star="${i}" title="${i}つ星">★</span>`;
+  }
+  return `<div class="star-rating-display">${starsHtml}</div>`;
 }
 
 function checkIsToday(startDateStr, dayKey) {
@@ -484,9 +516,10 @@ function renderHistoryPage() {
         <div class="history-menu-grid">
           ${DAYS_OF_WEEK.map(d => {
             const dayData = hist.plan && hist.plan.days ? hist.plan.days[d.key] : null;
+            const r = dayData && dayData.rating ? dayData.rating : 5;
             return `
               <div class="history-menu-item">
-                <div class="history-day">${d.short}曜</div>
+                <div class="history-day">${d.short}曜 <span style="color:#ffb703;">${'★'.repeat(r)}</span></div>
                 <div class="history-dish">${escapeHtml(dayData ? dayData.dish || '-' : '-')}</div>
               </div>
             `;
@@ -725,16 +758,31 @@ function setupEventListeners() {
 function openEditDayModal(dayKey) {
   state.editingDayKey = dayKey;
   const dayInfo = DAYS_OF_WEEK.find(d => d.key === dayKey);
-  const dayData = state.currentPlan.days[dayKey] || { dish: '', memo: '', ingredients: [] };
+  const dayData = state.currentPlan.days[dayKey] || { dish: '', memo: '', rating: 5, ingredients: [] };
 
   document.getElementById('modal-day-title').innerText = `${dayInfo.label}の献立・食材編集`;
   document.getElementById('edit-dish-input').value = dayData.dish || '';
   document.getElementById('edit-memo-input').value = dayData.memo || '';
 
+  state.editingModalRating = dayData.rating || 5;
+  updateModalStarRatingUI(state.editingModalRating);
+
   renderModalIngredientsList(dayData.ingredients || []);
 
   const modal = document.getElementById('edit-day-modal');
   modal.classList.add('active');
+}
+
+function updateModalStarRatingUI(rating) {
+  const stars = document.querySelectorAll('#modal-star-rating .star');
+  stars.forEach(s => {
+    const r = parseInt(s.getAttribute('data-rating'));
+    if (r <= rating) {
+      s.classList.add('filled');
+    } else {
+      s.classList.remove('filled');
+    }
+  });
 }
 
 function renderModalIngredientsList(ingredients) {
@@ -781,6 +829,15 @@ function setupModalHandlers() {
     closeBtn.addEventListener('click', () => modal.classList.remove('active'));
   }
 
+  const modalStars = document.querySelectorAll('#modal-star-rating .star');
+  modalStars.forEach(s => {
+    s.addEventListener('click', () => {
+      const r = parseInt(s.getAttribute('data-rating'));
+      state.editingModalRating = r;
+      updateModalStarRatingUI(r);
+    });
+  });
+
   if (addIngBtn) {
     addIngBtn.addEventListener('click', () => {
       const dayData = state.currentPlan.days[state.editingDayKey];
@@ -800,6 +857,7 @@ function setupModalHandlers() {
       const dayData = state.currentPlan.days[state.editingDayKey];
       dayData.dish = document.getElementById('edit-dish-input').value;
       dayData.memo = document.getElementById('edit-memo-input').value;
+      dayData.rating = state.editingModalRating || 5;
 
       // Update ingredient names & stores from DOM
       const nameInputs = document.querySelectorAll('.ing-name-input');

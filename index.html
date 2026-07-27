@@ -7,10 +7,11 @@
   
   <!-- PWA Meta Tags -->
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#e11d48">
+  <meta name="theme-color" content="#ff4d6d">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/3405/3405771.png">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="icon" type="image/svg+xml" href="./icon.svg">
 
   <!-- Google Fonts & Icons -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -32,9 +33,9 @@
     <header class="app-header">
       <div class="brand">
         <div class="brand-icon">
-          <i data-lucide="utensils"></i>
+          <img src="./icon.svg" alt="Cute App Icon">
         </div>
-        <div class="brand-title">献立＆買い物ノート</div>
+        <div class="brand-title">献立＆買い物ノート ✨</div>
       </div>
       <div class="header-actions">
         <div id="sync-status" class="sync-status-badge offline">
@@ -232,6 +233,17 @@
       <div class="form-group">
         <label class="form-label">ディナーのメニュー名</label>
         <input type="text" id="edit-dish-input" class="form-input" placeholder="例: 特製ハンバーグ & 和風スープ">
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">おいしさ・おすすめ度（星5段階評価）</label>
+        <div id="modal-star-rating" class="star-rating-input">
+          <span class="star" data-rating="1">★</span>
+          <span class="star" data-rating="2">★</span>
+          <span class="star" data-rating="3">★</span>
+          <span class="star" data-rating="4">★</span>
+          <span class="star" data-rating="5">★</span>
+        </div>
       </div>
 
       <div class="form-group">

@@ -4,13 +4,13 @@
   "description": "1週間のディナーメニューを考えてスーパー別買い物リストを作成・Google Driveで夫婦同期できるアプリ",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#e11d48",
+  "background_color": "#fff5f7",
+  "theme_color": "#ff4d6d",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/3405/3405771.png",
+      "src": "./icon.svg",
       "sizes": "512x512",
-      "type": "image/png",
+      "type": "image/svg+xml",
       "purpose": "any maskable"
     }
   ]
