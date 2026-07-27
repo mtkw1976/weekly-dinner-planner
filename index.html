@@ -156,11 +156,11 @@
         <!-- Google Drive Card -->
         <div class="history-card" style="margin-bottom:20px;">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-            <i data-lucide="folder-cloud" style="width:24px;height:24px;color:#34d399;"></i>
-            <h3 style="font-size:1.05rem;font-weight:700;">Google Drive 夫婦同期設定</h3>
+            <i data-lucide="folder-cloud" style="width:24px;height:24px;color:#10b981;"></i>
+            <h3 style="font-size:1.05rem;font-weight:700;">Google Drive クラウド同期</h3>
           </div>
           <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
-            ご自身のGoogleアカウントで連携することで、ご自身のGoogle Drive内に専用ファイルが作成され、奥様のiPhoneと旦那様のAndroid端末間で献立・買い物リスト・過去履歴が同期されます。
+            Googleアカウントで連携することで、ご自身のGoogle Drive内に専用ファイルが作成され、複数端末（iPhone / Android / PC）間で献立・食材・店舗タグ・過去履歴が自動同期されます。
           </p>
 
           <div class="form-group">
@@ -168,10 +168,21 @@
             <input type="text" id="gdrive-client-id-input" class="form-input" placeholder="例: 1234567890-xxx.apps.googleusercontent.com">
           </div>
 
-          <button id="gdrive-connect-btn" class="btn btn-primary" style="width:100%;background:linear-gradient(135deg, #10b981 0%, #059669 100%);">
-            <i data-lucide="key-round" style="width:16px;height:16px;"></i>
-            Googleアカウントでログインしてクラウド同期
-          </button>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <button id="gdrive-connect-btn" class="btn btn-primary" style="width:100%;background:linear-gradient(135deg, #10b981 0%, #059669 100%);">
+              <i data-lucide="key-round" style="width:16px;height:16px;"></i>
+              Googleアカウントでログイン認証
+            </button>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button id="gdrive-save-manual-btn" class="btn btn-secondary" style="flex:1;border-color:#10b981;color:#059669;">
+                <i data-lucide="cloud-upload" style="width:16px;height:16px;"></i> 今すぐDriveへ保存
+              </button>
+              <button id="gdrive-load-manual-btn" class="btn btn-secondary" style="flex:1;border-color:#818cf8;color:#4f46e5;">
+                <i data-lucide="cloud-download" style="width:16px;height:16px;"></i> Driveから復元(取得)
+              </button>
+            </div>
+          </div>
         </div>
 
         <!-- Manual Backup / Restore Card -->

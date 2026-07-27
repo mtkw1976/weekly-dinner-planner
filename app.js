@@ -155,7 +155,20 @@ class AppState {
     localStorage.setItem('current_plan', JSON.stringify(this.currentPlan));
     localStorage.setItem('history_plans', JSON.stringify(this.history));
     if (driveSync.accessToken) {
-      driveSync.saveToDrive(this.exportAllData()).catch(err => console.log('Auto Drive sync info:', err.message));
+      updateSyncStatusUI('syncing', 'Drive同期中...');
+      driveSync.saveToDrive(this.exportAllData())
+        .then(() => {
+          updateSyncStatusUI('synced', 'Drive同期済み');
+        })
+        .catch(err => {
+          console.error('Auto Drive sync info:', err.message);
+          if (err.message && err.message.includes('認証期限')) {
+            updateSyncStatusUI('expired', 'Drive要再認証');
+            showToast('Google Driveの認証期限が切れました。「クラウド設定」から再ログインしてください。');
+          } else {
+            updateSyncStatusUI('offline', 'ローカル保存');
+          }
+        });
     }
   }
 
@@ -187,6 +200,11 @@ document.addEventListener('DOMContentLoaded', () => {
   setupNavigation();
   setupEventListeners();
   initIcons();
+  if (driveSync.accessToken) {
+    updateSyncStatusUI('synced', 'Drive連携中');
+  } else {
+    updateSyncStatusUI('offline', 'ローカル保存');
+  }
 });
 
 function initIcons() {
@@ -205,6 +223,36 @@ function showToast(msg) {
   setTimeout(() => {
     toast.remove();
   }, 3000);
+}
+
+function updateSyncStatusUI(status, msg) {
+  const badge = document.getElementById('sync-status');
+  const text = document.getElementById('sync-status-text');
+  if (!badge || !text) return;
+
+  badge.className = 'sync-status-badge';
+  if (status === 'synced') {
+    text.innerText = msg || 'Drive同期済み';
+    badge.style.background = 'rgba(16, 185, 129, 0.15)';
+    badge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+    badge.style.color = '#059669';
+  } else if (status === 'expired') {
+    text.innerText = msg || 'Drive要再認証';
+    badge.style.background = '#fef3c7';
+    badge.style.borderColor = '#f59e0b';
+    badge.style.color = '#d97706';
+  } else if (status === 'syncing') {
+    text.innerText = msg || '同期中...';
+    badge.style.background = '#e0e7ff';
+    badge.style.borderColor = '#818cf8';
+    badge.style.color = '#4f46e5';
+  } else {
+    text.innerText = msg || 'ローカル保存';
+    badge.classList.add('offline');
+    badge.style.background = '#f1f5f9';
+    badge.style.borderColor = '#cbd5e1';
+    badge.style.color = 'var(--text-muted)';
+  }
 }
 
 // Navigation Logic
@@ -703,16 +751,66 @@ function setupEventListeners() {
         async () => {
           showToast('Google認証が完了しました！クラウドデータを同期します...');
           try {
+            updateSyncStatusUI('syncing', 'Drive同期中...');
             await driveSync.saveToDrive(state.exportAllData());
-            document.getElementById('sync-status').classList.remove('offline');
-            document.getElementById('sync-status-text').innerText = 'Drive同期済み';
-            showToast('Google Driveに献立データを正常に同期保存しました！');
+            updateSyncStatusUI('synced', 'Drive同期済み');
+            showToast('Google Driveに献立・店舗タグデータを正常に同期保存しました！');
           } catch (err) {
+            updateSyncStatusUI('offline', 'ローカル保存');
             alert(err.message);
           }
         },
         (err) => alert('Google認証エラー: ' + err)
       );
+    });
+  }
+
+  // Manual Save to Google Drive
+  const gdriveSaveManualBtn = document.getElementById('gdrive-save-manual-btn');
+  if (gdriveSaveManualBtn) {
+    gdriveSaveManualBtn.addEventListener('click', async () => {
+      if (!driveSync.accessToken) {
+        alert('Google Driveに接続されていません。「Googleアカウントでログイン認証」を先に行ってください。');
+        return;
+      }
+      try {
+        updateSyncStatusUI('syncing', 'Drive保存中...');
+        await driveSync.saveToDrive(state.exportAllData());
+        updateSyncStatusUI('synced', 'Drive同期済み');
+        showToast('Google Driveへ献立・店舗タグ全データを正常に保存しました！');
+      } catch (err) {
+        if (err.message && err.message.includes('認証期限')) {
+          updateSyncStatusUI('expired', 'Drive要再認証');
+        }
+        alert('Google Drive保存失敗: ' + err.message);
+      }
+    });
+  }
+
+  // Manual Load from Google Drive
+  const gdriveLoadManualBtn = document.getElementById('gdrive-load-manual-btn');
+  if (gdriveLoadManualBtn) {
+    gdriveLoadManualBtn.addEventListener('click', async () => {
+      if (!driveSync.accessToken) {
+        alert('Google Driveに接続されていません。「Googleアカウントでログイン認証」を先に行ってください。');
+        return;
+      }
+      if (confirm('Google Driveから最新データを取得して現在のデータを上書き復元しますか？')) {
+        try {
+          updateSyncStatusUI('syncing', 'Drive取得中...');
+          const data = await driveSync.loadFromDrive();
+          if (state.importAllData(data)) {
+            updateSyncStatusUI('synced', 'Drive同期済み');
+            showToast('Google Driveから最新の献立・店舗タグを同期復元しました！');
+            renderApp();
+          }
+        } catch (err) {
+          if (err.message && err.message.includes('認証期限')) {
+            updateSyncStatusUI('expired', 'Drive要再認証');
+          }
+          alert('Google Driveからの復元失敗: ' + err.message);
+        }
+      }
     });
   }
 
@@ -808,15 +906,41 @@ function renderModalIngredientsList(ingredients) {
 
   container.innerHTML = html;
 
-  // Event to add new ingredient row
+  // Event to remove ingredient row
   container.querySelectorAll('.remove-ing-btn').forEach(btn => {
     btn.addEventListener('click', () => {
+      syncModalDOMToState();
       const idx = parseInt(btn.getAttribute('data-idx'));
       const dayData = state.currentPlan.days[state.editingDayKey];
-      dayData.ingredients.splice(idx, 1);
-      renderModalIngredientsList(dayData.ingredients);
+      if (dayData && dayData.ingredients) {
+        dayData.ingredients.splice(idx, 1);
+        renderModalIngredientsList(dayData.ingredients);
+      }
     });
   });
+}
+
+function syncModalDOMToState() {
+  if (!state.editingDayKey || !state.currentPlan || !state.currentPlan.days) return;
+  const dayData = state.currentPlan.days[state.editingDayKey];
+  if (!dayData) return;
+
+  const nameInputs = document.querySelectorAll('.ing-name-input');
+  const storeSelects = document.querySelectorAll('.ing-store-select');
+
+  const syncedIngredients = [];
+  nameInputs.forEach((input, idx) => {
+    const val = input.value;
+    const storeVal = storeSelects[idx] ? storeSelects[idx].value : (state.stores[0] ? state.stores[0].id : 'other');
+    syncedIngredients.push({
+      id: dayData.ingredients && dayData.ingredients[idx] ? dayData.ingredients[idx].id : 'ing_' + Date.now() + idx,
+      name: val,
+      storeId: storeVal,
+      checked: dayData.ingredients && dayData.ingredients[idx] ? dayData.ingredients[idx].checked : false
+    });
+  });
+
+  dayData.ingredients = syncedIngredients;
 }
 
 function setupModalHandlers() {
@@ -840,12 +964,13 @@ function setupModalHandlers() {
 
   if (addIngBtn) {
     addIngBtn.addEventListener('click', () => {
+      syncModalDOMToState();
       const dayData = state.currentPlan.days[state.editingDayKey];
       if (!dayData.ingredients) dayData.ingredients = [];
       dayData.ingredients.push({
         id: 'ing_' + Date.now() + Math.random().toString(36).substr(2, 4),
         name: '',
-        storeId: state.stores[0].id,
+        storeId: state.stores[0] ? state.stores[0].id : 'other',
         checked: false
       });
       renderModalIngredientsList(dayData.ingredients);
@@ -854,30 +979,15 @@ function setupModalHandlers() {
 
   if (saveBtn) {
     saveBtn.addEventListener('click', () => {
+      syncModalDOMToState();
       const dayData = state.currentPlan.days[state.editingDayKey];
       dayData.dish = document.getElementById('edit-dish-input').value;
       dayData.memo = document.getElementById('edit-memo-input').value;
       dayData.rating = state.editingModalRating || 5;
 
-      // Update ingredient names & stores from DOM
-      const nameInputs = document.querySelectorAll('.ing-name-input');
-      const storeSelects = document.querySelectorAll('.ing-store-select');
-      
-      const newIngredients = [];
-      nameInputs.forEach((input, idx) => {
-        const val = input.value.trim();
-        if (val) {
-          const storeVal = storeSelects[idx].value;
-          newIngredients.push({
-            id: dayData.ingredients[idx] ? dayData.ingredients[idx].id : 'ing_' + Date.now() + idx,
-            name: val,
-            storeId: storeVal,
-            checked: false
-          });
-        }
-      });
+      // Filter out empty ingredient names
+      dayData.ingredients = dayData.ingredients.filter(i => i.name.trim() !== '');
 
-      dayData.ingredients = newIngredients;
       state.saveLocal();
       modal.classList.remove('active');
       renderApp();
