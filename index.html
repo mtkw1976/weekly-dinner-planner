@@ -120,12 +120,17 @@
 
         <!-- Store Tag Management Card -->
         <div class="history-card" style="margin-bottom:20px;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-            <i data-lucide="tags" style="width:24px;height:24px;color:#38bdf8;"></i>
-            <h3 style="font-size:1.05rem;font-weight:700;">買い物先スーパー・店舗タグの追加・管理</h3>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <i data-lucide="tags" style="width:24px;height:24px;color:#38bdf8;"></i>
+              <h3 style="font-size:1.05rem;font-weight:700;">買い物先スーパー・店舗タグの追加・管理</h3>
+            </div>
+            <button id="restore-default-stores-btn" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
+              <i data-lucide="rotate-ccw" style="width:13px;height:13px;"></i> 初期タグを復元
+            </button>
           </div>
           <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
-            食材ごとに設定できる買い物先店舗（スーパーや専門店）のタグを自由に登録・管理できます。
+            食材ごとに設定できる買い物先店舗（スーパーや専門店）のタグを自由に登録・削除・管理できます。
           </p>
 
           <!-- Store Tags List -->

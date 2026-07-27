@@ -543,11 +543,9 @@ function renderStoreTagsManageList() {
   container.innerHTML = state.stores.map(store => `
     <div class="ingredient-chip" style="padding:6px 12px;display:inline-flex;align-items:center;gap:6px;">
       <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
-      ${!DEFAULT_STORES.some(d => d.id === store.id) ? `
-        <button class="delete-store-btn" data-store-id="${store.id}" style="background:none;border:none;color:#f43f5e;cursor:pointer;display:inline-flex;align-items:center;padding:2px;" title="店舗タグを削除">
-          <i data-lucide="x" style="width:14px;height:14px;"></i>
-        </button>
-      ` : ''}
+      <button class="delete-store-btn" data-store-id="${store.id}" style="background:none;border:none;color:#f43f5e;cursor:pointer;display:inline-flex;align-items:center;padding:2px;" title="店舗タグ「${escapeHtml(store.name)}」を削除">
+        <i data-lucide="x" style="width:14px;height:14px;"></i>
+      </button>
     </div>
   `).join('');
 
@@ -557,7 +555,14 @@ function renderStoreTagsManageList() {
     btn.addEventListener('click', () => {
       const storeId = btn.getAttribute('data-store-id');
       const storeObj = state.stores.find(s => s.id === storeId);
-      if (storeObj && confirm(`店舗タグ「${storeObj.name}」を削除しますか？`)) {
+      if (!storeObj) return;
+
+      if (state.stores.length <= 1) {
+        alert('最低1つの店舗タグを残す必要があります。');
+        return;
+      }
+
+      if (confirm(`店舗タグ「${storeObj.name}」を削除しますか？`)) {
         state.stores = state.stores.filter(s => s.id !== storeId);
         state.saveLocal();
         showToast(`店舗タグ「${storeObj.name}」を削除しました`);
@@ -631,6 +636,23 @@ function setupEventListeners() {
       nameInput.value = '';
       showToast(`店舗タグ「${name}」を追加しました！`);
       renderApp();
+    });
+  }
+
+  // Restore default store tags handler
+  const restoreDefaultStoresBtn = document.getElementById('restore-default-stores-btn');
+  if (restoreDefaultStoresBtn) {
+    restoreDefaultStoresBtn.addEventListener('click', () => {
+      if (confirm('初期状態の店舗タグセット（イオン、ライフ、業務スーパー等）を追加復元しますか？')) {
+        DEFAULT_STORES.forEach(ds => {
+          if (!state.stores.some(s => s.id === ds.id)) {
+            state.stores.push({ ...ds });
+          }
+        });
+        state.saveLocal();
+        showToast('初期店舗タグを復元しました！');
+        renderApp();
+      }
     });
   }
 
