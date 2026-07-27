@@ -146,6 +146,9 @@ class AppState {
     localStorage.setItem('stores', JSON.stringify(this.stores));
     localStorage.setItem('current_plan', JSON.stringify(this.currentPlan));
     localStorage.setItem('history_plans', JSON.stringify(this.history));
+    if (driveSync.accessToken) {
+      driveSync.saveToDrive(this.exportAllData()).catch(err => console.log('Auto Drive sync info:', err.message));
+    }
   }
 
   exportAllData() {
@@ -271,11 +274,11 @@ function renderPlannerPage() {
         <div class="ingredients-list">
           ${dayData.ingredients && dayData.ingredients.length > 0 ? 
             dayData.ingredients.map(ing => {
-              const store = state.stores.find(s => s.id === ing.storeId) || { name: '未定', cssClass: 'tag-other' };
+              const store = state.stores.find(s => s.id === ing.storeId) || { name: '未定', cssClass: 'tag-other', color: '#64748b' };
               return `
                 <div class="ingredient-chip">
                   <span>${escapeHtml(ing.name)}</span>
-                  <span class="store-tag ${store.cssClass}">${escapeHtml(store.name)}</span>
+                  <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
                 </div>
               `;
             }).join('')
@@ -387,7 +390,7 @@ function renderShoppingPage() {
       <div class="shopping-section">
         <div class="shopping-section-header">
           <div class="store-header-title">
-            <span class="store-tag ${store.cssClass}">${escapeHtml(store.name)}</span>
+            <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
             <span>(${storeCheckedCount}/${items.length})</span>
           </div>
         </div>
@@ -468,9 +471,14 @@ function renderHistoryPage() {
             <div class="history-date">${escapeHtml(hist.title || '過去のディナー献立')}</div>
             <div style="font-size:0.8rem;color:var(--text-muted);">${dateStr}</div>
           </div>
-          <button class="btn btn-indigo btn-sm restore-hist-btn" data-hist-id="${hist.id}">
-            <i data-lucide="copy" style="width:14px;height:14px;"></i> 今週に複製
-          </button>
+          <div style="display:flex;gap:6px;">
+            <button class="btn btn-indigo btn-sm restore-hist-btn" data-hist-id="${hist.id}">
+              <i data-lucide="copy" style="width:14px;height:14px;"></i> 今週に複製
+            </button>
+            <button class="btn btn-secondary btn-sm delete-hist-btn" data-hist-id="${hist.id}" style="color:#f43f5e;border-color:rgba(244,63,94,0.3);">
+              <i data-lucide="trash-2" style="width:14px;height:14px;"></i> 削除
+            </button>
+          </div>
         </div>
 
         <div class="history-menu-grid">
@@ -502,6 +510,19 @@ function renderHistoryPage() {
       }
     });
   });
+
+  container.querySelectorAll('.delete-hist-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const histId = btn.getAttribute('data-hist-id');
+      const targetHist = state.history.find(h => h.id === histId);
+      if (targetHist && confirm(`履歴「${targetHist.title || '過去の献立'}」を削除してもよろしいですか？`)) {
+        state.history = state.history.filter(h => h.id !== histId);
+        state.saveLocal();
+        showToast('履歴を削除しました');
+        renderHistoryPage();
+      }
+    });
+  });
 }
 
 /* ==========================================================================
@@ -512,6 +533,38 @@ function renderSettingsPage() {
   if (clientIdInput) {
     clientIdInput.value = driveSync.getClientId();
   }
+  renderStoreTagsManageList();
+}
+
+function renderStoreTagsManageList() {
+  const container = document.getElementById('store-tags-manage-list');
+  if (!container) return;
+
+  container.innerHTML = state.stores.map(store => `
+    <div class="ingredient-chip" style="padding:6px 12px;display:inline-flex;align-items:center;gap:6px;">
+      <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
+      ${!DEFAULT_STORES.some(d => d.id === store.id) ? `
+        <button class="delete-store-btn" data-store-id="${store.id}" style="background:none;border:none;color:#f43f5e;cursor:pointer;display:inline-flex;align-items:center;padding:2px;" title="店舗タグを削除">
+          <i data-lucide="x" style="width:14px;height:14px;"></i>
+        </button>
+      ` : ''}
+    </div>
+  `).join('');
+
+  if (window.lucide) window.lucide.createIcons();
+
+  container.querySelectorAll('.delete-store-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const storeId = btn.getAttribute('data-store-id');
+      const storeObj = state.stores.find(s => s.id === storeId);
+      if (storeObj && confirm(`店舗タグ「${storeObj.name}」を削除しますか？`)) {
+        state.stores = state.stores.filter(s => s.id !== storeId);
+        state.saveLocal();
+        showToast(`店舗タグ「${storeObj.name}」を削除しました`);
+        renderApp();
+      }
+    });
+  });
 }
 
 /* ==========================================================================
@@ -552,6 +605,32 @@ function setupEventListeners() {
       state.saveLocal();
       renderShoppingPage();
       showToast('チェック済みの食材を整理しました！');
+    });
+  }
+
+  // Add new store tag form handler
+  const addStoreTagForm = document.getElementById('add-store-tag-form');
+  if (addStoreTagForm) {
+    addStoreTagForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const nameInput = document.getElementById('new-store-name-input');
+      const colorInput = document.getElementById('new-store-color-input');
+      const name = nameInput.value.trim();
+      const color = colorInput.value || '#ec4899';
+      if (!name) return;
+
+      const newId = 'store_' + Date.now();
+      state.stores.push({
+        id: newId,
+        name: name,
+        color: color,
+        cssClass: 'tag-custom'
+      });
+
+      state.saveLocal();
+      nameInput.value = '';
+      showToast(`店舗タグ「${name}」を追加しました！`);
+      renderApp();
     });
   }
 

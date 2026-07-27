@@ -118,6 +118,35 @@
           </div>
         </div>
 
+        <!-- Store Tag Management Card -->
+        <div class="history-card" style="margin-bottom:20px;">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+            <i data-lucide="tags" style="width:24px;height:24px;color:#38bdf8;"></i>
+            <h3 style="font-size:1.05rem;font-weight:700;">買い物先スーパー・店舗タグの追加・管理</h3>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
+            食材ごとに設定できる買い物先店舗（スーパーや専門店）のタグを自由に登録・管理できます。
+          </p>
+
+          <!-- Store Tags List -->
+          <div id="store-tags-manage-list" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;"></div>
+
+          <!-- Add New Store Tag Form -->
+          <form id="add-store-tag-form" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;background:rgba(15, 23, 42, 0.5);padding:12px;border-radius:var(--radius-md);border:1px solid var(--border-color);">
+            <div style="flex:2;min-width:140px;">
+              <label class="form-label" style="margin-bottom:4px;">店舗名・タグ名</label>
+              <input type="text" id="new-store-name-input" class="form-input" placeholder="例: 成城石井, コストコ, ロピア" required>
+            </div>
+            <div style="flex:1;min-width:100px;">
+              <label class="form-label" style="margin-bottom:4px;">タグカラー</label>
+              <input type="color" id="new-store-color-input" class="form-input" value="#ec4899" style="height:42px;padding:4px;cursor:pointer;">
+            </div>
+            <button type="submit" class="btn btn-primary" style="height:42px;white-space:nowrap;">
+              <i data-lucide="plus" style="width:16px;height:16px;"></i> タグを追加
+            </button>
+          </form>
+        </div>
+
         <!-- Google Drive Card -->
         <div class="history-card" style="margin-bottom:20px;">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
