@@ -37,7 +37,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <span class="brand-title">献立＆買い物ノート ✨</span>
-          <span class="version-badge">v1.6.0</span>
+          <span class="version-badge">v1.7.0</span>
         </div>
       </div>
       <div class="header-actions">
@@ -58,10 +58,16 @@
             <i data-lucide="calendar-range" style="color:var(--accent-rose);"></i>
             今週のディナー献立
           </div>
-          <button id="archive-current-plan-btn" class="btn btn-primary btn-sm">
-            <i data-lucide="bookmark-plus" style="width:14px;height:14px;"></i>
-            履歴に保存
-          </button>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button id="archive-current-plan-btn" class="btn btn-primary btn-sm">
+              <i data-lucide="bookmark-plus" style="width:14px;height:14px;"></i>
+              履歴に保存
+            </button>
+            <button id="clear-all-plan-btn" class="btn btn-secondary btn-sm" style="color:#f43f5e;border-color:rgba(244,63,94,0.3);">
+              <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
+              献立を一括クリア
+            </button>
+          </div>
         </div>
 
         <div style="display:flex;justify-content:center;margin-bottom:16px;">
@@ -325,11 +331,16 @@
         <textarea id="edit-memo-input" class="form-textarea" rows="2" placeholder="例: 玉ねぎは飴色になるまでよく炒める"></textarea>
       </div>
 
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
         <label class="form-label" style="margin-bottom:0;">必要食材と購入スーパー</label>
-        <button id="add-ingredient-row-btn" class="btn btn-secondary btn-sm" style="color:var(--accent-rose);">
-          <i data-lucide="plus" style="width:14px;height:14px;"></i> 食材を追加
-        </button>
+        <div style="display:flex;gap:6px;">
+          <button id="clear-day-ingredients-btn" class="btn btn-secondary btn-sm" style="color:#f43f5e;font-size:0.75rem;padding:4px 8px;border-color:rgba(244,63,94,0.3);">
+            <i data-lucide="trash" style="width:13px;height:13px;"></i> 食材を一括全削除
+          </button>
+          <button id="add-ingredient-row-btn" class="btn btn-secondary btn-sm" style="color:var(--accent-rose);font-size:0.75rem;padding:4px 8px;">
+            <i data-lucide="plus" style="width:13px;height:13px;"></i> 食材を追加
+          </button>
+        </div>
       </div>
 
       <!-- Ingredient Rows List -->

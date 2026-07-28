@@ -249,7 +249,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '1.6.0',
+      version: '1.7.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -828,6 +828,27 @@ function setupEventListeners() {
     });
   }
 
+  // Bulk clear weekly plan handler
+  const clearAllPlanBtn = document.getElementById('clear-all-plan-btn');
+  if (clearAllPlanBtn) {
+    clearAllPlanBtn.addEventListener('click', () => {
+      if (confirm('今週の全曜日の献立と食材をすべて一括クリア（リセット）してもよろしいですか？')) {
+        const daysKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+        daysKeys.forEach(k => {
+          state.currentPlan.days[k] = {
+            dish: '',
+            memo: '',
+            rating: 5,
+            ingredients: []
+          };
+        });
+        state.saveLocal();
+        renderApp();
+        showToast('今週の献立と食材を一括クリアしました');
+      }
+    });
+  }
+
   // Save current plan to history
   const archiveCurrentBtn = document.getElementById('archive-current-plan-btn');
   if (archiveCurrentBtn) {
@@ -1201,6 +1222,24 @@ function setupModalHandlers() {
       updateModalStarRatingUI(r);
     });
   });
+
+  // Bulk clear day ingredients handler
+  const clearDayIngsBtn = document.getElementById('clear-day-ingredients-btn');
+  if (clearDayIngsBtn) {
+    clearDayIngsBtn.addEventListener('click', () => {
+      if (!state.editingDayKey) return;
+      const dayData = state.currentPlan.days[state.editingDayKey];
+      if (dayData && dayData.ingredients && dayData.ingredients.length > 0) {
+        if (confirm('この曜日の登録食材をすべて一括全削除しますか？')) {
+          dayData.ingredients = [];
+          renderModalIngredientsList([]);
+          showToast('登録食材を一括全削除しました');
+        }
+      } else {
+        showToast('削除対象の食材がありません');
+      }
+    });
+  }
 
   if (addIngBtn) {
     addIngBtn.addEventListener('click', () => {
