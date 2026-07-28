@@ -176,7 +176,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '1.0',
+      version: '1.3.0',
       exportedAt: new Date().toISOString(),
       stores: this.stores,
       currentPlan: this.currentPlan,
