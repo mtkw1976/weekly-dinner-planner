@@ -26,6 +26,42 @@ const DAYS_OF_WEEK_BASE = [
   { key: 'sun', label: '日曜日', short: '日' },
 ];
 
+const DAY_KEY_TO_JS_DAY = {
+  sun: 0,
+  mon: 1,
+  tue: 2,
+  wed: 3,
+  thu: 4,
+  fri: 5,
+  sat: 6
+};
+
+function getWeekStartDate(baseDate = new Date(), startDayKey = 'mon') {
+  const date = new Date(baseDate);
+  date.setHours(0, 0, 0, 0);
+  const currentDayNum = date.getDay();
+  const targetStartNum = DAY_KEY_TO_JS_DAY[startDayKey] !== undefined ? DAY_KEY_TO_JS_DAY[startDayKey] : 1;
+
+  let diff = currentDayNum - targetStartNum;
+  if (diff < 0) {
+    diff += 7;
+  }
+  date.setDate(date.getDate() - diff);
+  return date;
+}
+
+function getDayDateInWeek(weekStartDate, dayKey) {
+  const startNum = weekStartDate.getDay();
+  const targetNum = DAY_KEY_TO_JS_DAY[dayKey] !== undefined ? DAY_KEY_TO_JS_DAY[dayKey] : 1;
+  let offset = targetNum - startNum;
+  if (offset < 0) {
+    offset += 7;
+  }
+  const d = new Date(weekStartDate);
+  d.setDate(d.getDate() + offset);
+  return d;
+}
+
 function getOrderedDaysOfWeek() {
   const startKey = (state && state.startDayOfWeek) ? state.startDayOfWeek : 'mon';
   const startIndex = DAYS_OF_WEEK_BASE.findIndex(d => d.key === startKey);
@@ -213,7 +249,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '1.5.0',
+      version: '1.6.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -446,11 +482,8 @@ function renderStarRatingHtml(rating = 5, dayKey = '') {
 }
 
 function checkIsToday(startDateStr, dayKey) {
-  const days = getOrderedDaysOfWeek();
-  const dayIndex = days.findIndex(d => d.key === dayKey);
-  const start = new Date(startDateStr);
-  const targetDate = new Date(start);
-  targetDate.setDate(targetDate.getDate() + (dayIndex !== -1 ? dayIndex : 0));
+  const start = getWeekStartDate(new Date(startDateStr), state.startDayOfWeek || 'mon');
+  const targetDate = getDayDateInWeek(start, dayKey);
   
   const today = new Date();
   return today.getFullYear() === targetDate.getFullYear() &&
@@ -459,11 +492,11 @@ function checkIsToday(startDateStr, dayKey) {
 }
 
 function formatDateRange(startDateStr) {
-  const days = getOrderedDaysOfWeek();
-  const start = new Date(startDateStr);
+  const start = getWeekStartDate(new Date(startDateStr), state.startDayOfWeek || 'mon');
   const end = new Date(start);
   end.setDate(end.getDate() + 6);
 
+  const days = getOrderedDaysOfWeek();
   const firstDay = days[0];
   const lastDay = days[days.length - 1];
 
