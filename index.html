@@ -188,6 +188,42 @@
           </div>
         </div>
 
+        <!-- Debug Mode & Inspection Card -->
+        <div class="history-card" style="margin-bottom:20px;border-color:#a29bfe;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <i data-lucide="bug" style="width:24px;height:24px;color:#6c5ce7;"></i>
+              <h3 style="font-size:1.05rem;font-weight:700;">デバッグモード (Google Driveデータ検証)</h3>
+            </div>
+            <label class="toggle-switch" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
+              <input type="checkbox" id="debug-mode-toggle" style="width:18px;height:18px;cursor:pointer;">
+              <span style="font-size:0.85rem;font-weight:700;color:var(--text-main);">デバッグモード有効化</span>
+            </label>
+          </div>
+          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px;">
+            デバッグモードをONにすると、Google Drive上の `WeeklyDinnerPlanner_Data.json` の生のJSONデータを直接取得・表示・確認・適用できます。
+          </p>
+
+          <div id="debug-panel" style="display:none;background:#fff0f3;border:1px solid #fecdd3;border-radius:var(--radius-md);padding:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+              <span style="font-size:0.82rem;font-weight:700;color:#7c6f6e;" id="debug-status-info">ステータス: 未取得</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <button id="debug-fetch-btn" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
+                  <i data-lucide="refresh-cw" style="width:13px;height:13px;"></i> JSON再取得
+                </button>
+                <button id="debug-apply-btn" class="btn btn-indigo btn-sm" style="font-size:0.78rem;">
+                  <i data-lucide="check-circle" style="width:13px;height:13px;"></i> アプリに反映
+                </button>
+                <button id="debug-copy-btn" class="btn btn-secondary btn-sm" style="font-size:0.78rem;">
+                  <i data-lucide="copy" style="width:13px;height:13px;"></i> コピー
+                </button>
+              </div>
+            </div>
+
+            <pre id="debug-json-container" style="background:#2d2424;color:#ff9ebb;padding:14px;border-radius:var(--radius-sm);font-family:Consolas, monospace;font-size:0.78rem;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-all;">Google Driveからデータを取得中...</pre>
+          </div>
+        </div>
+
         <!-- Manual Backup / Restore Card -->
         <div class="history-card">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">

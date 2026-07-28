@@ -148,13 +148,15 @@ class AppState {
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
     this.editingModalRating = 5;
+    this.debugMode = localStorage.getItem('gdrive_debug_mode') === 'true';
+    this.lastDebugData = null;
   }
 
-  saveLocal() {
+  saveLocal(skipDriveSync = false) {
     localStorage.setItem('stores', JSON.stringify(this.stores));
     localStorage.setItem('current_plan', JSON.stringify(this.currentPlan));
     localStorage.setItem('history_plans', JSON.stringify(this.history));
-    if (driveSync.accessToken) {
+    if (driveSync.accessToken && !skipDriveSync) {
       updateSyncStatusUI('syncing', 'Drive同期中...');
       driveSync.saveToDrive(this.exportAllData())
         .then(() => {
@@ -182,12 +184,18 @@ class AppState {
     };
   }
 
-  importAllData(data) {
+  importAllData(data, skipDriveSync = false) {
     if (!data) return false;
-    if (data.stores) this.stores = data.stores;
-    if (data.currentPlan) this.currentPlan = data.currentPlan;
-    if (data.history) this.history = data.history;
-    this.saveLocal();
+    if (data.stores && Array.isArray(data.stores) && data.stores.length > 0) {
+      this.stores = data.stores;
+    }
+    if (data.currentPlan && data.currentPlan.days) {
+      this.currentPlan = data.currentPlan;
+    }
+    if (data.history && Array.isArray(data.history)) {
+      this.history = data.history;
+    }
+    this.saveLocal(skipDriveSync);
     return true;
   }
 }
@@ -615,6 +623,42 @@ function renderSettingsPage() {
     clientIdInput.value = driveSync.getClientId();
   }
   renderStoreTagsManageList();
+
+  const debugToggle = document.getElementById('debug-mode-toggle');
+  const debugPanel = document.getElementById('debug-panel');
+  if (debugToggle && debugPanel) {
+    debugToggle.checked = Boolean(state.debugMode);
+    debugPanel.style.display = state.debugMode ? 'block' : 'none';
+    if (state.debugMode) {
+      fetchAndDisplayDebugJson();
+    }
+  }
+}
+
+async function fetchAndDisplayDebugJson() {
+  const container = document.getElementById('debug-json-container');
+  const info = document.getElementById('debug-status-info');
+  if (!container) return;
+
+  if (!driveSync.accessToken) {
+    if (info) info.innerText = 'ステータス: 未ログイン (認証を行ってください)';
+    container.innerText = 'Google Driveに未ログインのためデータを表示できません。「Googleアカウントでログイン認証」を行ってください。';
+    return;
+  }
+
+  try {
+    if (info) info.innerText = 'ステータス: 取得中...';
+    container.innerText = 'Google Driveから `WeeklyDinnerPlanner_Data.json` を取得しています...';
+    
+    const rawData = await driveSync.loadFromDrive();
+    state.lastDebugData = rawData;
+    
+    if (info) info.innerText = `ステータス: 取得成功 (${new Date().toLocaleTimeString()} 取得)`;
+    container.innerText = JSON.stringify(rawData, null, 2);
+  } catch (err) {
+    if (info) info.innerText = 'ステータス: 取得失敗';
+    container.innerText = `Google Driveからのデータ取得でエラーが発生しました:\n${err.message}`;
+  }
 }
 
 function renderStoreTagsManageList() {
@@ -752,9 +796,26 @@ function setupEventListeners() {
           showToast('Google認証が完了しました！クラウドデータを同期します...');
           try {
             updateSyncStatusUI('syncing', 'Drive同期中...');
-            await driveSync.saveToDrive(state.exportAllData());
+            
+            // Try loading from Drive first to avoid overwriting Drive data with local defaults!
+            let loaded = false;
+            try {
+              const driveData = await driveSync.loadFromDrive();
+              if (driveData && (driveData.currentPlan || driveData.stores || driveData.history)) {
+                state.importAllData(driveData, true);
+                loaded = true;
+              }
+            } catch (loadErr) {
+              console.log('No existing Drive data or empty, saving local state instead:', loadErr.message);
+            }
+
+            if (!loaded) {
+              await driveSync.saveToDrive(state.exportAllData());
+            }
+
             updateSyncStatusUI('synced', 'Drive同期済み');
-            showToast('Google Driveに献立・店舗タグデータを正常に同期保存しました！');
+            renderApp();
+            showToast(loaded ? 'Google Driveからクラウドデータを読み込み同期しました！' : 'Google Driveに初期データを同期保存しました！');
           } catch (err) {
             updateSyncStatusUI('offline', 'ローカル保存');
             alert(err.message);
@@ -799,7 +860,7 @@ function setupEventListeners() {
         try {
           updateSyncStatusUI('syncing', 'Drive取得中...');
           const data = await driveSync.loadFromDrive();
-          if (state.importAllData(data)) {
+          if (state.importAllData(data, true)) {
             updateSyncStatusUI('synced', 'Drive同期済み');
             showToast('Google Driveから最新の献立・店舗タグを同期復元しました！');
             renderApp();
@@ -810,6 +871,53 @@ function setupEventListeners() {
           }
           alert('Google Driveからの復元失敗: ' + err.message);
         }
+      }
+    });
+  }
+
+  // Debug Mode Handlers
+  const debugToggle = document.getElementById('debug-mode-toggle');
+  if (debugToggle) {
+    debugToggle.addEventListener('change', (e) => {
+      state.debugMode = e.target.checked;
+      localStorage.setItem('gdrive_debug_mode', state.debugMode ? 'true' : 'false');
+      const panel = document.getElementById('debug-panel');
+      if (panel) panel.style.display = state.debugMode ? 'block' : 'none';
+      if (state.debugMode) {
+        fetchAndDisplayDebugJson();
+      }
+    });
+  }
+
+  const debugFetchBtn = document.getElementById('debug-fetch-btn');
+  if (debugFetchBtn) {
+    debugFetchBtn.addEventListener('click', () => {
+      fetchAndDisplayDebugJson();
+    });
+  }
+
+  const debugApplyBtn = document.getElementById('debug-apply-btn');
+  if (debugApplyBtn) {
+    debugApplyBtn.addEventListener('click', () => {
+      if (!state.lastDebugData) {
+        alert('取得済みのJSONデータがありません');
+        return;
+      }
+      if (confirm('Google Driveから取得したJSONデータをアプリに強制適用しますか？')) {
+        state.importAllData(state.lastDebugData, true);
+        showToast('JSONデータをアプリに適用しました！');
+        renderApp();
+      }
+    });
+  }
+
+  const debugCopyBtn = document.getElementById('debug-copy-btn');
+  if (debugCopyBtn) {
+    debugCopyBtn.addEventListener('click', () => {
+      const container = document.getElementById('debug-json-container');
+      if (container && container.innerText) {
+        navigator.clipboard.writeText(container.innerText);
+        showToast('JSONをクリップボードにコピーしました');
       }
     });
   }
