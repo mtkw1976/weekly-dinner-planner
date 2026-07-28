@@ -15,8 +15,8 @@ const DEFAULT_STORES = [
   { id: 'other', name: 'その他', color: '#64748b', cssClass: 'tag-other' },
 ];
 
-// Days of the week definition
-const DAYS_OF_WEEK = [
+// Days of the week base definition
+const DAYS_OF_WEEK_BASE = [
   { key: 'mon', label: '月曜日', short: '月' },
   { key: 'tue', label: '火曜日', short: '火' },
   { key: 'wed', label: '水曜日', short: '水' },
@@ -25,6 +25,52 @@ const DAYS_OF_WEEK = [
   { key: 'sat', label: '土曜日', short: '土' },
   { key: 'sun', label: '日曜日', short: '日' },
 ];
+
+function getOrderedDaysOfWeek() {
+  const startKey = (state && state.startDayOfWeek) ? state.startDayOfWeek : 'mon';
+  const startIndex = DAYS_OF_WEEK_BASE.findIndex(d => d.key === startKey);
+  if (startIndex === -1 || startIndex === 0) return DAYS_OF_WEEK_BASE;
+  return [
+    ...DAYS_OF_WEEK_BASE.slice(startIndex),
+    ...DAYS_OF_WEEK_BASE.slice(0, startIndex)
+  ];
+}
+
+function getSortedStoresByUsage() {
+  if (!state || !state.stores) return [];
+  const counts = {};
+  state.stores.forEach(s => counts[s.id] = 0);
+
+  if (state.currentPlan && state.currentPlan.days) {
+    Object.values(state.currentPlan.days).forEach(day => {
+      if (day && day.ingredients) {
+        day.ingredients.forEach(ing => {
+          if (ing.storeId) {
+            counts[ing.storeId] = (counts[ing.storeId] || 0) + 1;
+          }
+        });
+      }
+    });
+  }
+
+  if (state.history && Array.isArray(state.history)) {
+    state.history.forEach(hist => {
+      if (hist.plan && hist.plan.days) {
+        Object.values(hist.plan.days).forEach(day => {
+          if (day && day.ingredients) {
+            day.ingredients.forEach(ing => {
+              if (ing.storeId) {
+                counts[ing.storeId] = (counts[ing.storeId] || 0) + 1;
+              }
+            });
+          }
+        });
+      }
+    });
+  }
+
+  return [...state.stores].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0));
+}
 
 // Default Initial Sample Data
 const DEFAULT_WEEKLY_PLAN = {
@@ -144,6 +190,7 @@ class AppState {
         plan: JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN))
       }
     ];
+    this.startDayOfWeek = localStorage.getItem('week_start_day') || 'mon';
     this.activeTab = 'planner'; // planner, shopping, history, settings
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
@@ -156,6 +203,7 @@ class AppState {
     localStorage.setItem('stores', JSON.stringify(this.stores));
     localStorage.setItem('current_plan', JSON.stringify(this.currentPlan));
     localStorage.setItem('history_plans', JSON.stringify(this.history));
+    localStorage.setItem('week_start_day', this.startDayOfWeek);
     if (driveSync.accessToken && !skipDriveSync) {
       updateSyncStatusUI('syncing', 'Drive同期中...');
       driveSync.saveToDrive(this.exportAllData())
@@ -176,8 +224,9 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '1.3.0',
+      version: '1.5.0',
       exportedAt: new Date().toISOString(),
+      startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
       currentPlan: this.currentPlan,
       history: this.history
@@ -186,6 +235,7 @@ class AppState {
 
   importAllData(data, skipDriveSync = false) {
     if (!data) return false;
+    if (data.startDayOfWeek) this.startDayOfWeek = data.startDayOfWeek;
     if (data.stores && Array.isArray(data.stores) && data.stores.length > 0) {
       this.stores = data.stores;
     }
@@ -203,13 +253,30 @@ class AppState {
 const state = new AppState();
 
 // Initialize App & Event Listeners
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   renderApp();
   setupNavigation();
   setupEventListeners();
   initIcons();
+
   if (driveSync.accessToken) {
-    updateSyncStatusUI('synced', 'Drive連携中');
+    updateSyncStatusUI('syncing', 'Drive同期中...');
+    try {
+      const driveData = await driveSync.loadFromDrive();
+      if (driveData && (driveData.currentPlan || driveData.stores || driveData.history)) {
+        state.importAllData(driveData, true);
+        renderApp();
+        updateSyncStatusUI('synced', 'Drive同期済み');
+        showToast('Google Driveから最新の献立・店舗タグデータを自動読み込みしました！');
+      }
+    } catch (err) {
+      console.log('Auto Drive refresh sync info:', err.message);
+      if (err.message && err.message.includes('認証期限')) {
+        updateSyncStatusUI('expired', 'Drive要再認証');
+      } else {
+        updateSyncStatusUI('offline', 'ローカル保存');
+      }
+    }
   } else {
     updateSyncStatusUI('offline', 'ローカル保存');
   }
@@ -316,7 +383,8 @@ function renderPlannerPage() {
   dateRangeEl.innerText = formatDateRange(state.currentPlan.startDate);
 
   let html = '';
-  DAYS_OF_WEEK.forEach(dayInfo => {
+  const days = getOrderedDaysOfWeek();
+  days.forEach(dayInfo => {
     const dayData = state.currentPlan.days[dayInfo.key] || { dish: '', memo: '', ingredients: [] };
     const isToday = checkIsToday(state.currentPlan.startDate, dayInfo.key);
 
@@ -389,15 +457,30 @@ function renderStarRatingHtml(rating = 5, dayKey = '') {
 }
 
 function checkIsToday(startDateStr, dayKey) {
-  const dayIndex = DAYS_OF_WEEK.findIndex(d => d.key === dayKey);
+  const days = getOrderedDaysOfWeek();
+  const dayIndex = days.findIndex(d => d.key === dayKey);
   const start = new Date(startDateStr);
   const targetDate = new Date(start);
-  targetDate.setDate(targetDate.getDate() + dayIndex);
+  targetDate.setDate(targetDate.getDate() + (dayIndex !== -1 ? dayIndex : 0));
   
   const today = new Date();
   return today.getFullYear() === targetDate.getFullYear() &&
          today.getMonth() === targetDate.getMonth() &&
          today.getDate() === targetDate.getDate();
+}
+
+function formatDateRange(startDateStr) {
+  const days = getOrderedDaysOfWeek();
+  const start = new Date(startDateStr);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+
+  const firstDay = days[0];
+  const lastDay = days[days.length - 1];
+
+  const startFormatted = `${start.getFullYear()}/${start.getMonth() + 1}/${start.getDate()}`;
+  const endFormatted = `${end.getMonth() + 1}/${end.getDate()}`;
+  return `${startFormatted} (${firstDay.short}) 〜 ${endFormatted} (${lastDay.short})`;
 }
 
 /* ==========================================================================
@@ -409,12 +492,13 @@ function renderShoppingPage() {
   if (!filterBar || !shoppingListContainer) return;
 
   // Render Filter Chips
+  const sortedStores = getSortedStoresByUsage();
   let filterHtml = `
     <button class="filter-chip ${state.shoppingFilterStore === 'all' ? 'active' : ''}" data-store="all">
       すべてのスーパー
     </button>
   `;
-  state.stores.forEach(store => {
+  sortedStores.forEach(store => {
     filterHtml += `
       <button class="filter-chip ${state.shoppingFilterStore === store.id ? 'active' : ''}" data-store="${store.id}">
         ${escapeHtml(store.name)}
@@ -432,9 +516,10 @@ function renderShoppingPage() {
 
   // Group ingredients by store
   const itemsByStore = {};
-  state.stores.forEach(s => { itemsByStore[s.id] = []; });
+  sortedStores.forEach(s => { itemsByStore[s.id] = []; });
 
-  DAYS_OF_WEEK.forEach(dayInfo => {
+  const days = getOrderedDaysOfWeek();
+  days.forEach(dayInfo => {
     const dayData = state.currentPlan.days[dayInfo.key];
     if (dayData && dayData.ingredients) {
       dayData.ingredients.forEach(ing => {
@@ -454,7 +539,7 @@ function renderShoppingPage() {
   let totalItemsCount = 0;
   let checkedItemsCount = 0;
 
-  state.stores.forEach(store => {
+  sortedStores.forEach(store => {
     if (state.shoppingFilterStore !== 'all' && state.shoppingFilterStore !== store.id) {
       return;
     }
@@ -570,7 +655,7 @@ function renderHistoryPage() {
         </div>
 
         <div class="history-menu-grid">
-          ${DAYS_OF_WEEK.map(d => {
+          ${getOrderedDaysOfWeek().map(d => {
             const dayData = hist.plan && hist.plan.days ? hist.plan.days[d.key] : null;
             const r = dayData && dayData.rating ? dayData.rating : 5;
             return `
@@ -622,6 +707,12 @@ function renderSettingsPage() {
   if (clientIdInput) {
     clientIdInput.value = driveSync.getClientId();
   }
+  
+  const startDaySelect = document.getElementById('start-day-select');
+  if (startDaySelect) {
+    startDaySelect.value = state.startDayOfWeek || 'mon';
+  }
+
   renderStoreTagsManageList();
 
   const debugToggle = document.getElementById('debug-mode-toggle');
@@ -665,7 +756,8 @@ function renderStoreTagsManageList() {
   const container = document.getElementById('store-tags-manage-list');
   if (!container) return;
 
-  container.innerHTML = state.stores.map(store => `
+  const sortedStores = getSortedStoresByUsage();
+  container.innerHTML = sortedStores.map(store => `
     <div class="ingredient-chip" style="padding:6px 12px;display:inline-flex;align-items:center;gap:6px;">
       <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
       <button class="delete-store-btn" data-store-id="${store.id}" style="background:none;border:none;color:#f43f5e;cursor:pointer;display:inline-flex;align-items:center;padding:2px;" title="店舗タグ「${escapeHtml(store.name)}」を削除">
@@ -701,6 +793,19 @@ function renderStoreTagsManageList() {
    Modal & Event Handlers
    ========================================================================== */
 function setupEventListeners() {
+  // Start day of week setting handler
+  const startDaySelect = document.getElementById('start-day-select');
+  if (startDaySelect) {
+    startDaySelect.addEventListener('change', (e) => {
+      state.startDayOfWeek = e.target.value;
+      localStorage.setItem('week_start_day', state.startDayOfWeek);
+      state.saveLocal();
+      renderApp();
+      const selectedDayObj = DAYS_OF_WEEK_BASE.find(d => d.key === state.startDayOfWeek);
+      showToast(`献立の開始曜日を「${selectedDayObj ? selectedDayObj.label : ''}」に変更しました！`);
+    });
+  }
+
   // Save current plan to history
   const archiveCurrentBtn = document.getElementById('archive-current-plan-btn');
   if (archiveCurrentBtn) {
@@ -963,7 +1068,8 @@ function setupEventListeners() {
 
 function openEditDayModal(dayKey) {
   state.editingDayKey = dayKey;
-  const dayInfo = DAYS_OF_WEEK.find(d => d.key === dayKey);
+  const days = getOrderedDaysOfWeek();
+  const dayInfo = days.find(d => d.key === dayKey) || DAYS_OF_WEEK_BASE.find(d => d.key === dayKey);
   const dayData = state.currentPlan.days[dayKey] || { dish: '', memo: '', rating: 5, ingredients: [] };
 
   document.getElementById('modal-day-title').innerText = `${dayInfo.label}の献立・食材編集`;
@@ -995,13 +1101,14 @@ function renderModalIngredientsList(ingredients) {
   const container = document.getElementById('modal-ingredients-container');
   if (!container) return;
 
+  const sortedStores = getSortedStoresByUsage();
   let html = '';
   ingredients.forEach((ing, idx) => {
     html += `
       <div class="form-group" style="display:flex;gap:8px;align-items:center;">
         <input type="text" class="form-input ing-name-input" value="${escapeHtml(ing.name)}" placeholder="食材名 (例: 豚コマ肉 200g)" data-idx="${idx}">
         <select class="form-select ing-store-select" data-idx="${idx}" style="width:140px;">
-          ${state.stores.map(s => `
+          ${sortedStores.map(s => `
             <option value="${s.id}" ${ing.storeId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>
           `).join('')}
         </select>
@@ -1036,10 +1143,13 @@ function syncModalDOMToState() {
   const nameInputs = document.querySelectorAll('.ing-name-input');
   const storeSelects = document.querySelectorAll('.ing-store-select');
 
+  const sortedStores = getSortedStoresByUsage();
+  const defaultStoreId = sortedStores[0] ? sortedStores[0].id : 'other';
+
   const syncedIngredients = [];
   nameInputs.forEach((input, idx) => {
     const val = input.value;
-    const storeVal = storeSelects[idx] ? storeSelects[idx].value : (state.stores[0] ? state.stores[0].id : 'other');
+    const storeVal = storeSelects[idx] ? storeSelects[idx].value : defaultStoreId;
     syncedIngredients.push({
       id: dayData.ingredients && dayData.ingredients[idx] ? dayData.ingredients[idx].id : 'ing_' + Date.now() + idx,
       name: val,
@@ -1075,10 +1185,12 @@ function setupModalHandlers() {
       syncModalDOMToState();
       const dayData = state.currentPlan.days[state.editingDayKey];
       if (!dayData.ingredients) dayData.ingredients = [];
+      const sortedStores = getSortedStoresByUsage();
+      const defaultStoreId = sortedStores[0] ? sortedStores[0].id : 'other';
       dayData.ingredients.push({
         id: 'ing_' + Date.now() + Math.random().toString(36).substr(2, 4),
         name: '',
-        storeId: state.stores[0] ? state.stores[0].id : 'other',
+        storeId: defaultStoreId,
         checked: false
       });
       renderModalIngredientsList(dayData.ingredients);
