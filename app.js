@@ -165,17 +165,6 @@ function getMonday(d) {
   return new Date(date.setDate(diff));
 }
 
-// Helper: Format Date String
-function formatDateRange(startDateStr) {
-  const start = new Date(startDateStr);
-  const end = new Date(start);
-  end.setDate(end.getDate() + 6);
-
-  const startFormatted = `${start.getFullYear()}/${start.getMonth() + 1}/${start.getDate()}`;
-  const endFormatted = `${end.getMonth() + 1}/${end.getDate()}`;
-  return `${startFormatted} (月) 〜 ${endFormatted} (日)`;
-}
-
 // App State Management
 class AppState {
   constructor() {
