@@ -118,7 +118,7 @@ function normalizeDayData(dayData) {
       oldIngredients = dayData.ingredients;
     } else if (typeof dayData.ingredients === 'string' && dayData.ingredients.trim() !== '') {
       oldIngredients = dayData.ingredients.split(',').map((name, idx) => ({
-        id: 'ing_' + Date.now() + idx,
+        id: 'ing_legacy_' + idx,
         name: name.trim(),
         storeId: 'other',
         checked: false
@@ -126,7 +126,7 @@ function normalizeDayData(dayData) {
     }
 
     dishes = [{
-      id: 'dish_' + Date.now(),
+      id: 'dish_single_legacy',
       title: oldDishTitle,
       rating: oldRating,
       memo: oldMemo,
@@ -136,10 +136,10 @@ function normalizeDayData(dayData) {
 
   const sanitizedDishes = dishes.map((dish, dIdx) => {
     if (!dish || typeof dish !== 'object') {
-      return { id: 'dish_' + Date.now() + dIdx, title: '', rating: 5, memo: '', ingredients: [] };
+      return { id: 'dish_legacy_' + dIdx, title: '', rating: 5, memo: '', ingredients: [] };
     }
     const safeDish = {
-      id: dish.id || ('dish_' + Date.now() + dIdx),
+      id: dish.id || ('dish_legacy_' + dIdx),
       title: typeof dish.title === 'string' ? dish.title : '',
       rating: typeof dish.rating === 'number' ? dish.rating : 5,
       memo: typeof dish.memo === 'string' ? dish.memo : '',
@@ -148,17 +148,19 @@ function normalizeDayData(dayData) {
 
     if (Array.isArray(dish.ingredients)) {
       safeDish.ingredients = dish.ingredients.filter(ing => ing && typeof ing === 'object').map((ing, iIdx) => ({
-        id: ing.id || ('ing_' + Date.now() + iIdx),
+        id: ing.id || ('ing_' + (safeDish.id || 'dish') + '_' + iIdx),
         name: typeof ing.name === 'string' ? ing.name : String(ing || ''),
         storeId: typeof ing.storeId === 'string' ? ing.storeId : 'other',
-        checked: Boolean(ing.checked)
+        checked: Boolean(ing.checked),
+        order: typeof ing.order === 'number' ? ing.order : undefined
       }));
     } else if (typeof dish.ingredients === 'string' && dish.ingredients.trim() !== '') {
       safeDish.ingredients = dish.ingredients.split(',').map((name, iIdx) => ({
-        id: 'ing_' + Date.now() + iIdx,
+        id: 'ing_' + (safeDish.id || 'dish') + '_' + iIdx,
         name: name.trim(),
         storeId: 'other',
-        checked: false
+        checked: false,
+        order: undefined
       }));
     }
 
@@ -334,7 +336,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.9',
+      version: '2.1.4',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -677,19 +679,19 @@ function renderShoppingPage() {
         isExtra: true,
         sourceTag: '日常品メモ',
         dayKey: 'extra',
-        orderIndex: item.order !== undefined ? item.order : idx
+        orderIndex: typeof item.order === 'number' ? item.order : ((idx + 1) * 10)
       });
     });
   }
 
   // 2. Recipe Ingredients
   const days = getOrderedDaysOfWeek();
-  days.forEach(dayInfo => {
+  days.forEach((dayInfo, dayIdx) => {
     const dayRaw = state.currentPlan.days[dayInfo.key];
     const dayData = normalizeDayData(dayRaw);
     if (dayData && dayData.dishes) {
       dayData.dishes.forEach((dish, dIdx) => {
-        if (dish.ingredients) {
+        if (dish.ingredients && Array.isArray(dish.ingredients)) {
           dish.ingredients.forEach((ing, iIdx) => {
             const storeId = ing.storeId || 'other';
             if (!itemsByStore[storeId]) itemsByStore[storeId] = [];
@@ -699,7 +701,7 @@ function renderShoppingPage() {
               sourceTag: `${dayInfo.short}: ${dish.title || 'メニュー'}`,
               dayKey: dayInfo.key,
               dishId: dish.id,
-              orderIndex: ing.order !== undefined ? ing.order : (dIdx * 10 + iIdx)
+              orderIndex: typeof ing.order === 'number' ? ing.order : (1000 + dayIdx * 100 + dIdx * 10 + iIdx * 10)
             });
           });
         }
@@ -716,6 +718,7 @@ function renderShoppingPage() {
       return a.orderIndex - b.orderIndex;
     });
   });
+  window.itemsByStore = itemsByStore;
 
   let listHtml = '';
   let totalItemsCount = 0;
@@ -829,13 +832,15 @@ function setupShoppingListDragAndDrop(container, itemsByStore) {
   // HTML5 Drag and Drop (Mouse)
   container.querySelectorAll('.shopping-item-row').forEach(row => {
     row.addEventListener('dragstart', (e) => {
+      const storeId = row.getAttribute('data-store-id');
+      const idx = parseInt(row.getAttribute('data-idx'));
       draggedRow = row;
-      draggedStoreId = row.getAttribute('data-store-id');
-      draggedIdx = parseInt(row.getAttribute('data-idx'));
+      draggedStoreId = storeId;
+      draggedIdx = idx;
       row.classList.add('dragging');
       if (e.dataTransfer) {
         e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', draggedIdx);
+        e.dataTransfer.setData('text/plain', JSON.stringify({ storeId, idx }));
       }
     });
 
@@ -858,8 +863,19 @@ function setupShoppingListDragAndDrop(container, itemsByStore) {
       const targetStoreId = row.getAttribute('data-store-id');
       const targetIdx = parseInt(row.getAttribute('data-idx'));
 
-      if (draggedRow && draggedStoreId === targetStoreId && draggedIdx !== null && draggedIdx !== targetIdx) {
-        reorderStoreItems(itemsByStore[draggedStoreId], draggedIdx, targetIdx);
+      let fromIdx = draggedIdx;
+      let fromStoreId = draggedStoreId;
+
+      if (e.dataTransfer) {
+        try {
+          const payload = JSON.parse(e.dataTransfer.getData('text/plain') || '{}');
+          if (payload.idx !== undefined) fromIdx = parseInt(payload.idx);
+          if (payload.storeId) fromStoreId = payload.storeId;
+        } catch (err) {}
+      }
+
+      if (fromStoreId === targetStoreId && fromIdx !== null && !isNaN(fromIdx) && !isNaN(targetIdx) && fromIdx !== targetIdx) {
+        reorderStoreItems(itemsByStore[fromStoreId], fromIdx, targetIdx);
       }
     });
 
@@ -927,18 +943,26 @@ function reorderStoreItems(itemsList, fromIdx, toIdx) {
   const [movedItem] = itemsList.splice(fromIdx, 1);
   itemsList.splice(toIdx, 0, movedItem);
 
-  // Update orderIndex for all items in this store
+  // Update orderIndex for all items in this store and lock in state using 10-step scale
   itemsList.forEach((item, newOrder) => {
-    item.orderIndex = newOrder;
+    const assignedOrder = (newOrder + 1) * 10;
+    item.orderIndex = assignedOrder;
     if (item.isExtra) {
-      const target = state.extraShoppingItems.find(i => i.id === item.id);
-      if (target) target.order = newOrder;
+      const target = state.extraShoppingItems.find(i => i.id === item.id || i.name === item.name);
+      if (target) target.order = assignedOrder;
     } else {
-      const dayData = normalizeDayData(state.currentPlan.days[item.dayKey]);
-      const dish = dayData.dishes.find(d => d.id === item.dishId);
-      if (dish && dish.ingredients) {
-        const ing = dish.ingredients.find(i => i.id === item.id);
-        if (ing) ing.order = newOrder;
+      if (state.currentPlan && state.currentPlan.days && state.currentPlan.days[item.dayKey]) {
+        const dayData = normalizeDayData(state.currentPlan.days[item.dayKey]);
+        if (dayData && dayData.dishes) {
+          const dish = dayData.dishes.find(d => d.id === item.dishId);
+          if (dish && dish.ingredients) {
+            const ing = dish.ingredients.find(i => i.id === item.id || i.name === item.name);
+            if (ing) {
+              ing.order = assignedOrder;
+              state.currentPlan.days[item.dayKey] = dayData;
+            }
+          }
+        }
       }
     }
   });
@@ -946,6 +970,7 @@ function reorderStoreItems(itemsList, fromIdx, toIdx) {
   state.saveLocal();
   renderShoppingPage();
 }
+window.reorderStoreItems = reorderStoreItems;
 
 function swapShoppingItemsOrder(itemsList, idxA, idxB) {
   const itemA = itemsList[idxA];

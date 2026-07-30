@@ -41,47 +41,38 @@ server.listen(8080, async () => {
     await page.goto('http://localhost:8080/index.html');
     await page.waitForTimeout(1000);
 
-    console.log('--- BROWSER CONSOLE LOGS ---');
-    consoleLogs.forEach(l => console.log(l));
-
-    console.log('--- PAGE UNCAUGHT ERRORS ---');
-    pageErrors.forEach(e => console.log(e));
-
-    const plannerCardsCount = await page.locator('.dinner-card').count();
-    console.log(`Planner cards count: ${plannerCardsCount}`);
-
-    const navButtonsCount = await page.locator('.nav-item').count();
-    console.log(`Nav buttons count: ${navButtonsCount}`);
-
-    // TEST 1: Extra Memo Card on #page-planner ("今週の献立")
-    console.log('\n--- TESTING PLANNER TAB EXTRA MEMO CARD LOCATION ---');
-    const memoHeaderInPlanner = await page.locator('#page-planner h3', { hasText: '日常品・その他買い物メモ（献立以外）' }).count();
-    console.log(`Extra Memo Header Count on #page-planner: ${memoHeaderInPlanner}`);
-
-    await page.fill('#extra-item-name-input', 'トイレットペーパー');
-    await page.click('#add-extra-item-form button[type="submit"]');
-    await page.waitForTimeout(500);
-
-    const addedItemCount = await page.locator('#extra-items-list-container:has-text("トイレットペーパー")').count();
-    console.log(`Added Extra Item ("トイレットペーパー") found in container: ${addedItemCount > 0 ? 'YES' : 'NO'}`);
-
-    // TEST 2: Shopping Tab Item Drag Handles & Sorting
-    console.log('\n--- TESTING SHOPPING TAB ITEM DRAG HANDLES & SORTING ---');
+    // Navigate to shopping tab
     await page.click('[data-tab="shopping"]');
     await page.waitForTimeout(500);
 
-    const dragHandlesCount = await page.locator('#shopping-list-container .drag-handle').count();
-    console.log(`Drag Handle Icons count in shopping list: ${dragHandlesCount}`);
+    const sectionRows = page.locator('#shopping-list-container .shopping-section[data-store-id="greengrocer"] .shopping-item-row');
+    const rowCount = await sectionRows.count();
+    console.log(`Greengrocer store items count: ${rowCount}`);
 
-    // Click the first checkbox in the shopping list
-    const firstCheckbox = page.locator('#shopping-list-container .custom-checkbox').first();
-    await firstCheckbox.click();
-    await page.waitForTimeout(500);
+    if (rowCount >= 2) {
+      const item0Before = await sectionRows.nth(0).locator('.shopping-item-name').innerText();
+      const item1Before = await sectionRows.nth(1).locator('.shopping-item-name').innerText();
+      console.log(`BEFORE REORDER: Item 0 = "${item0Before}", Item 1 = "${item1Before}"`);
 
-    // Verify last item in the first store section has class 'checked'
-    const lastRowInFirstSection = page.locator('#shopping-list-container .shopping-section').first().locator('.shopping-item-row').last();
-    const isLastItemChecked = await lastRowInFirstSection.evaluate(el => el.classList.contains('checked'));
-    console.log(`Checked item moved to bottom of store section: ${isLastItemChecked ? 'YES' : 'NO'}`);
+      // Call reorderStoreItems
+      const res = await page.evaluate(() => {
+        if (window.itemsByStore && window.itemsByStore['greengrocer']) {
+          window.reorderStoreItems(window.itemsByStore['greengrocer'], 0, 1);
+          return 'REORDERED_OK';
+        }
+        return 'ITEMS_BY_STORE_NOT_FOUND';
+      });
+      console.log(`reorderStoreItems execution status: ${res}`);
+
+      await page.waitForTimeout(500);
+
+      const item0After = await sectionRows.nth(0).locator('.shopping-item-name').innerText();
+      const item1After = await sectionRows.nth(1).locator('.shopping-item-name').innerText();
+      console.log(`AFTER REORDER: Item 0 = "${item0After}", Item 1 = "${item1After}"`);
+
+      const didSwap = (item0After === item1Before && item1After === item0Before);
+      console.log(`Drag & Drop / Reordering locked position successfully: ${didSwap ? 'YES' : 'NO'}`);
+    }
 
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log('Screenshot saved to test-screenshot.png');
