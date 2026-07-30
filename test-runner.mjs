@@ -53,18 +53,32 @@ server.listen(8080, async () => {
     const navButtonsCount = await page.locator('.nav-item').count();
     console.log(`Nav buttons count: ${navButtonsCount}`);
 
-    // TEST: Verify Extra Memo Card on #page-planner ("今週の献立")
+    // TEST 1: Extra Memo Card on #page-planner ("今週の献立")
     console.log('\n--- TESTING PLANNER TAB EXTRA MEMO CARD LOCATION ---');
     const memoHeaderInPlanner = await page.locator('#page-planner h3', { hasText: '日常品・その他買い物メモ（献立以外）' }).count();
     console.log(`Extra Memo Header Count on #page-planner: ${memoHeaderInPlanner}`);
 
-    // Fill form and add an extra item on #page-planner
     await page.fill('#extra-item-name-input', 'トイレットペーパー');
     await page.click('#add-extra-item-form button[type="submit"]');
     await page.waitForTimeout(500);
 
     const addedItemCount = await page.locator('#extra-items-list-container:has-text("トイレットペーパー")').count();
     console.log(`Added Extra Item ("トイレットペーパー") found in container: ${addedItemCount > 0 ? 'YES' : 'NO'}`);
+
+    // TEST 2: Shopping Tab Item Sorting (Unchecked at top, Checked at bottom)
+    console.log('\n--- TESTING SHOPPING TAB ITEM SORTING ---');
+    await page.click('[data-tab="shopping"]');
+    await page.waitForTimeout(500);
+
+    // Click the first checkbox in the shopping list
+    const firstCheckbox = page.locator('#shopping-list-container .custom-checkbox').first();
+    await firstCheckbox.click();
+    await page.waitForTimeout(500);
+
+    // Verify last item in the first store section has class 'checked'
+    const lastRowInFirstSection = page.locator('#shopping-list-container .shopping-section').first().locator('.shopping-item-row').last();
+    const isLastItemChecked = await lastRowInFirstSection.evaluate(el => el.classList.contains('checked'));
+    console.log(`Checked item moved to bottom of store section: ${isLastItemChecked ? 'YES' : 'NO'}`);
 
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log('Screenshot saved to test-screenshot.png');

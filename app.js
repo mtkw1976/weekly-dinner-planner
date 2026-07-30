@@ -334,7 +334,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.7',
+      version: '2.0.8',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -707,9 +707,14 @@ function renderShoppingPage() {
     }
   });
 
-  // Sort items inside each store group by orderIndex
+  // Sort items inside each store group: Unchecked items first (top), checked items last (bottom)
   Object.keys(itemsByStore).forEach(sId => {
-    itemsByStore[sId].sort((a, b) => a.orderIndex - b.orderIndex);
+    itemsByStore[sId].sort((a, b) => {
+      if (a.checked !== b.checked) {
+        return (a.checked ? 1 : 0) - (b.checked ? 1 : 0);
+      }
+      return a.orderIndex - b.orderIndex;
+    });
   });
 
   let listHtml = '';
