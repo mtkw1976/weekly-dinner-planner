@@ -72,35 +72,58 @@ function getOrderedDaysOfWeek() {
   ];
 }
 
+function normalizeDayData(dayData) {
+  if (!dayData) {
+    return { dishes: [{ id: 'dish_' + Date.now(), title: '', rating: 5, memo: '', ingredients: [] }] };
+  }
+  if (dayData.dishes && Array.isArray(dayData.dishes) && dayData.dishes.length > 0) {
+    return dayData;
+  }
+
+  const oldDishTitle = dayData.dish || '';
+  const oldRating = dayData.rating || 5;
+  const oldMemo = dayData.memo || '';
+  const oldIngredients = dayData.ingredients || [];
+
+  return {
+    dishes: [
+      {
+        id: 'dish_' + Date.now(),
+        title: oldDishTitle,
+        rating: oldRating,
+        memo: oldMemo,
+        ingredients: oldIngredients
+      }
+    ]
+  };
+}
+
 function getSortedStoresByUsage() {
   if (!state || !state.stores) return [];
   const counts = {};
   state.stores.forEach(s => counts[s.id] = 0);
 
   if (state.currentPlan && state.currentPlan.days) {
-    Object.values(state.currentPlan.days).forEach(day => {
-      if (day && day.ingredients) {
-        day.ingredients.forEach(ing => {
-          if (ing.storeId) {
-            counts[ing.storeId] = (counts[ing.storeId] || 0) + 1;
-          }
-        });
-      }
-    });
-  }
-
-  if (state.history && Array.isArray(state.history)) {
-    state.history.forEach(hist => {
-      if (hist.plan && hist.plan.days) {
-        Object.values(hist.plan.days).forEach(day => {
-          if (day && day.ingredients) {
-            day.ingredients.forEach(ing => {
+    Object.values(state.currentPlan.days).forEach(dayRaw => {
+      const day = normalizeDayData(dayRaw);
+      if (day && day.dishes) {
+        day.dishes.forEach(dish => {
+          if (dish.ingredients) {
+            dish.ingredients.forEach(ing => {
               if (ing.storeId) {
                 counts[ing.storeId] = (counts[ing.storeId] || 0) + 1;
               }
             });
           }
         });
+      }
+    });
+  }
+
+  if (state.extraShoppingItems && Array.isArray(state.extraShoppingItems)) {
+    state.extraShoppingItems.forEach(item => {
+      if (item.storeId) {
+        counts[item.storeId] = (counts[item.storeId] || 0) + 1;
       }
     });
   }
@@ -176,33 +199,7 @@ const DEFAULT_WEEKLY_PLAN = {
         { id: 'i21', name: '生ハム', storeId: 'kaldi', checked: false },
         { id: 'i22', name: '粉チーズ & ドレッシング', storeId: 'aeon', checked: false },
         { id: 'i23', name: 'ロメインレタス', storeId: 'greengrocer', checked: false },
-      ]
-    },
-    sun: {
-      dish: '黒毛和牛の贅沢すき焼き',
-      memo: '1週間の締めくくり！家族みんなで鍋を囲む時間',
-      rating: 5,
-      ingredients: [
-        { id: 'i24', name: 'すき焼き用牛肉 600g', storeId: 'butcher', checked: false },
-        { id: 'i25', name: '長ネギ 2本', storeId: 'greengrocer', checked: false },
-        { id: 'i26', name: '焼き豆腐', storeId: 'life', checked: false },
-        { id: 'i27', name: 'しらたき', storeId: 'gyomu', checked: false },
-        { id: 'i28', name: '卵 1パック', storeId: 'aeon', checked: false },
-      ]
-    }
-  }
-};
-
-// Helper: Get Monday of current week
-function getMonday(d) {
-  const date = new Date(d);
-  const day = date.getDay();
-  const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(date.setDate(diff));
-}
-
-// App State Management
-class AppState {
+ class AppState {
   constructor() {
     this.stores = JSON.parse(localStorage.getItem('stores')) || DEFAULT_STORES;
     this.currentPlan = JSON.parse(localStorage.getItem('current_plan')) || DEFAULT_WEEKLY_PLAN;
@@ -215,11 +212,12 @@ class AppState {
         plan: JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN))
       }
     ];
+    this.extraShoppingItems = JSON.parse(localStorage.getItem('extra_shopping_items')) || [];
     this.startDayOfWeek = localStorage.getItem('week_start_day') || 'mon';
     this.activeTab = 'planner'; // planner, shopping, history, settings
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
-    this.editingModalRating = 5;
+    this.editingDayData = null;
     this.debugMode = localStorage.getItem('gdrive_debug_mode') === 'true';
     this.lastDebugData = null;
   }
@@ -228,6 +226,7 @@ class AppState {
     localStorage.setItem('stores', JSON.stringify(this.stores));
     localStorage.setItem('current_plan', JSON.stringify(this.currentPlan));
     localStorage.setItem('history_plans', JSON.stringify(this.history));
+    localStorage.setItem('extra_shopping_items', JSON.stringify(this.extraShoppingItems));
     localStorage.setItem('week_start_day', this.startDayOfWeek);
     if (driveSync.accessToken && !skipDriveSync) {
       updateSyncStatusUI('syncing', 'Drive同期中...');
@@ -240,6 +239,43 @@ class AppState {
           if (err.message && err.message.includes('認証期限')) {
             updateSyncStatusUI('expired', 'Drive要再認証');
             showToast('Google Driveの認証期限が切れました。「クラウド設定」から再ログインしてください。');
+          } else {
+            updateSyncStatusUI('offline', 'ローカル保存');
+          }
+        });
+    }
+  }
+
+  exportAllData() {
+    return {
+      version: '2.0.0',
+      exportedAt: new Date().toISOString(),
+      startDayOfWeek: this.startDayOfWeek,
+      stores: this.stores,
+      currentPlan: this.currentPlan,
+      history: this.history,
+      extraShoppingItems: this.extraShoppingItems
+    };
+  }
+
+  importAllData(data, skipDriveSync = false) {
+    if (!data) return false;
+    if (data.startDayOfWeek) this.startDayOfWeek = data.startDayOfWeek;
+    if (data.stores && Array.isArray(data.stores) && data.stores.length > 0) {
+      this.stores = data.stores;
+    }
+    if (data.currentPlan && data.currentPlan.days) {
+      this.currentPlan = data.currentPlan;
+    }
+    if (data.history && Array.isArray(data.history)) {
+      this.history = data.history;
+    }
+    if (data.extraShoppingItems && Array.isArray(data.extraShoppingItems)) {
+      this.extraShoppingItems = data.extraShoppingItems;
+    }
+    this.saveLocal(skipDriveSync);
+    return true;
+  }st('Google Driveの認証期限が切れました。「クラウド設定」から再ログインしてください。');
           } else {
             updateSyncStatusUI('offline', 'ローカル保存');
           }
@@ -410,8 +446,41 @@ function renderPlannerPage() {
   let html = '';
   const days = getOrderedDaysOfWeek();
   days.forEach(dayInfo => {
-    const dayData = state.currentPlan.days[dayInfo.key] || { dish: '', memo: '', ingredients: [] };
+    const dayRaw = state.currentPlan.days[dayInfo.key];
+    const dayData = normalizeDayData(dayRaw);
     const isToday = checkIsToday(state.currentPlan.startDate, dayInfo.key);
+
+    let dishesHtml = '';
+    if (dayData.dishes && dayData.dishes.length > 0) {
+      dayData.dishes.forEach((dish, dIdx) => {
+        dishesHtml += `
+          <div class="planner-dish-item" style="${dIdx > 0 ? 'margin-top:14px;padding-top:14px;border-top:1px dashed #fecdd3;' : ''}">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+              <div class="menu-title" style="font-size:1.05rem;font-weight:800;color:#372e2d;">
+                ${escapeHtml(dish.title || '（未登録）')}
+              </div>
+              ${renderStarRatingHtml(dish.rating || 5, dayInfo.key, dish.id)}
+            </div>
+            ${dish.memo ? `<div class="menu-memo" style="margin-top:4px;">${escapeHtml(dish.memo)}</div>` : ''}
+
+            <div class="ingredients-list" style="margin-top:8px;">
+              ${dish.ingredients && dish.ingredients.length > 0 ? 
+                dish.ingredients.map(ing => {
+                  const store = state.stores.find(s => s.id === ing.storeId) || { name: '未定', cssClass: 'tag-other', color: '#64748b' };
+                  return `
+                    <div class="ingredient-chip">
+                      <span>${escapeHtml(ing.name)}</span>
+                      <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
+                    </div>
+                  `;
+                }).join('')
+                : '<span style="font-size:0.78rem;color:var(--text-subtle);">食材未登録</span>'
+              }
+            </div>
+          </div>
+        `;
+      });
+    }
 
     html += `
       <div class="dinner-card" data-day="${dayInfo.key}">
@@ -424,25 +493,8 @@ function renderPlannerPage() {
             <i data-lucide="edit-3" style="width:14px;height:14px;"></i> 編集
           </button>
         </div>
-        
-        <div class="menu-title">${escapeHtml(dayData.dish || '（未登録）')}</div>
-        ${renderStarRatingHtml(dayData.rating || 5, dayInfo.key)}
-        ${dayData.memo ? `<div class="menu-memo">${escapeHtml(dayData.memo)}</div>` : ''}
 
-        <div class="ingredients-list">
-          ${dayData.ingredients && dayData.ingredients.length > 0 ? 
-            dayData.ingredients.map(ing => {
-              const store = state.stores.find(s => s.id === ing.storeId) || { name: '未定', cssClass: 'tag-other', color: '#64748b' };
-              return `
-                <div class="ingredient-chip">
-                  <span>${escapeHtml(ing.name)}</span>
-                  <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
-                </div>
-              `;
-            }).join('')
-            : '<span style="font-size:0.8rem;color:var(--text-subtle);">必要食材がまだ登録されていません</span>'
-          }
-        </div>
+        ${dishesHtml}
       </div>
     `;
   });
@@ -461,22 +513,29 @@ function renderPlannerPage() {
     star.addEventListener('click', (e) => {
       e.stopPropagation();
       const dayKey = star.getAttribute('data-day');
+      const dishId = star.getAttribute('data-dish-id');
       const starValue = parseInt(star.getAttribute('data-star'));
+
       if (dayKey && state.currentPlan.days[dayKey]) {
-        state.currentPlan.days[dayKey].rating = starValue;
-        state.saveLocal();
-        renderPlannerPage();
-        showToast(`${starValue}つ星に評価しました！⭐`);
+        const dayData = normalizeDayData(state.currentPlan.days[dayKey]);
+        const targetDish = dayData.dishes.find(d => d.id === dishId) || dayData.dishes[0];
+        if (targetDish) {
+          targetDish.rating = starValue;
+          state.currentPlan.days[dayKey] = dayData;
+          state.saveLocal();
+          renderPlannerPage();
+          showToast(`${starValue}つ星に評価しました！⭐`);
+        }
       }
     });
   });
 }
 
-function renderStarRatingHtml(rating = 5, dayKey = '') {
+function renderStarRatingHtml(rating = 5, dayKey = '', dishId = '') {
   let starsHtml = '';
   for (let i = 1; i <= 5; i++) {
     const isFilled = i <= rating;
-    starsHtml += `<span class="star ${isFilled ? 'filled' : ''}" data-day="${dayKey}" data-star="${i}" title="${i}つ星">★</span>`;
+    starsHtml += `<span class="star ${isFilled ? 'filled' : ''}" data-day="${dayKey}" data-dish-id="${dishId}" data-star="${i}" title="${i}つ星">★</span>`;
   }
   return `<div class="star-rating-display">${starsHtml}</div>`;
 }
@@ -513,7 +572,8 @@ function renderShoppingPage() {
   const shoppingListContainer = document.getElementById('shopping-list-container');
   if (!filterBar || !shoppingListContainer) return;
 
-  // Render Filter Chips
+  renderExtraShoppingItems();
+
   const sortedStores = getSortedStoresByUsage();
   let filterHtml = `
     <button class="filter-chip ${state.shoppingFilterStore === 'all' ? 'active' : ''}" data-store="all">
@@ -536,25 +596,53 @@ function renderShoppingPage() {
     });
   });
 
-  // Group ingredients by store
+  // Group all items (recipe ingredients + non-menu extra items) by store
   const itemsByStore = {};
   sortedStores.forEach(s => { itemsByStore[s.id] = []; });
 
+  // 1. Non-menu Extra Shopping Items
+  if (state.extraShoppingItems && Array.isArray(state.extraShoppingItems)) {
+    state.extraShoppingItems.forEach((item, idx) => {
+      const storeId = item.storeId || 'other';
+      if (!itemsByStore[storeId]) itemsByStore[storeId] = [];
+      itemsByStore[storeId].push({
+        ...item,
+        isExtra: true,
+        sourceTag: '日常品メモ',
+        dayKey: 'extra',
+        orderIndex: item.order !== undefined ? item.order : idx
+      });
+    });
+  }
+
+  // 2. Recipe Ingredients
   const days = getOrderedDaysOfWeek();
   days.forEach(dayInfo => {
-    const dayData = state.currentPlan.days[dayInfo.key];
-    if (dayData && dayData.ingredients) {
-      dayData.ingredients.forEach(ing => {
-        const storeId = ing.storeId || 'other';
-        if (!itemsByStore[storeId]) itemsByStore[storeId] = [];
-        itemsByStore[storeId].push({
-          ...ing,
-          dayLabel: dayInfo.short,
-          dish: dayData.dish,
-          dayKey: dayInfo.key
-        });
+    const dayRaw = state.currentPlan.days[dayInfo.key];
+    const dayData = normalizeDayData(dayRaw);
+    if (dayData && dayData.dishes) {
+      dayData.dishes.forEach((dish, dIdx) => {
+        if (dish.ingredients) {
+          dish.ingredients.forEach((ing, iIdx) => {
+            const storeId = ing.storeId || 'other';
+            if (!itemsByStore[storeId]) itemsByStore[storeId] = [];
+            itemsByStore[storeId].push({
+              ...ing,
+              isExtra: false,
+              sourceTag: `${dayInfo.short}: ${dish.title || 'メニュー'}`,
+              dayKey: dayInfo.key,
+              dishId: dish.id,
+              orderIndex: ing.order !== undefined ? ing.order : (dIdx * 10 + iIdx)
+            });
+          });
+        }
       });
     }
+  });
+
+  // Sort items inside each store group by orderIndex
+  Object.keys(itemsByStore).forEach(sId => {
+    itemsByStore[sId].sort((a, b) => a.orderIndex - b.orderIndex);
   });
 
   let listHtml = '';
@@ -582,7 +670,7 @@ function renderShoppingPage() {
     checkedItemsCount += storeCheckedCount;
 
     listHtml += `
-      <div class="shopping-section">
+      <div class="shopping-section" data-store-id="${store.id}">
         <div class="shopping-section-header">
           <div class="store-header-title">
             <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
@@ -590,18 +678,24 @@ function renderShoppingPage() {
           </div>
         </div>
         <div class="shopping-items-body">
-          ${items.map(item => `
-            <div class="shopping-item-row ${item.checked ? 'checked' : ''}">
+          ${items.map((item, idx) => `
+            <div class="shopping-item-row ${item.checked ? 'checked' : ''}" data-store-id="${store.id}" data-idx="${idx}">
               <div class="shopping-item-left">
                 <div class="custom-checkbox ${item.checked ? 'checked' : ''}" 
-                     data-day="${item.dayKey}" data-ing-id="${item.id}">
+                     data-is-extra="${item.isExtra}" data-day="${item.dayKey}" data-dish-id="${item.dishId || ''}" data-ing-id="${item.id}">
                   ${item.checked ? '<i data-lucide="check" style="width:14px;height:14px;"></i>' : ''}
                 </div>
                 <div>
                   <div class="shopping-item-name">${escapeHtml(item.name)}</div>
                 </div>
               </div>
-              <div class="shopping-item-menu">${item.dayLabel}: ${escapeHtml(item.dish || '献立')}</div>
+              <div style="display:flex;align-items:center;gap:6px;">
+                <div class="shopping-item-menu" style="font-size:0.75rem;">${escapeHtml(item.sourceTag)}</div>
+                <div style="display:inline-flex;gap:2px;">
+                  <button type="button" class="reorder-btn move-up-btn" data-store-id="${store.id}" data-idx="${idx}" title="上に移動" style="padding:2px 6px;font-size:0.72rem;background:#ffe4e6;border:1px solid #fecdd3;border-radius:4px;cursor:pointer;color:#ff4d6d;font-weight:700;">▲</button>
+                  <button type="button" class="reorder-btn move-down-btn" data-store-id="${store.id}" data-idx="${idx}" title="下に移動" style="padding:2px 6px;font-size:0.72rem;background:#ffe4e6;border:1px solid #fecdd3;border-radius:4px;cursor:pointer;color:#ff4d6d;font-weight:700;">▼</button>
+                </div>
+              </div>
             </div>
           `).join('')}
         </div>
@@ -613,29 +707,134 @@ function renderShoppingPage() {
     listHtml = `
       <div style="text-align:center;padding:40px 16px;color:var(--text-muted);">
         <i data-lucide="shopping-bag" style="width:48px;height:48px;margin-bottom:12px;opacity:0.5;"></i>
-        <p>買い物リストは空です。今週の献立に食材を追加してください。</p>
+        <p>買い物リストは空です。献立食材や日常品メモを追加してください。</p>
       </div>
     `;
   }
 
   shoppingListContainer.innerHTML = listHtml;
+  if (window.lucide) window.lucide.createIcons();
 
-  // Toggle Item Checked
+  // Toggle Item Checked Handlers
   shoppingListContainer.querySelectorAll('.custom-checkbox').forEach(box => {
     box.addEventListener('click', () => {
+      const isExtra = box.getAttribute('data-is-extra') === 'true';
       const dayKey = box.getAttribute('data-day');
+      const dishId = box.getAttribute('data-dish-id');
       const ingId = box.getAttribute('data-ing-id');
-      const dayData = state.currentPlan.days[dayKey];
-      if (dayData && dayData.ingredients) {
-        const targetIng = dayData.ingredients.find(i => i.id === ingId);
-        if (targetIng) {
-          targetIng.checked = !targetIng.checked;
+
+      if (isExtra) {
+        const item = state.extraShoppingItems.find(i => i.id === ingId);
+        if (item) {
+          item.checked = !item.checked;
           state.saveLocal();
           renderShoppingPage();
+        }
+      } else {
+        const dayData = normalizeDayData(state.currentPlan.days[dayKey]);
+        const dish = dayData.dishes.find(d => d.id === dishId);
+        if (dish && dish.ingredients) {
+          const ing = dish.ingredients.find(i => i.id === ingId);
+          if (ing) {
+            ing.checked = !ing.checked;
+            state.currentPlan.days[dayKey] = dayData;
+            state.saveLocal();
+            renderShoppingPage();
+          }
         }
       }
     });
   });
+
+  // Reorder Item Handlers (Move Up / Move Down)
+  shoppingListContainer.querySelectorAll('.move-up-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const storeId = btn.getAttribute('data-store-id');
+      const idx = parseInt(btn.getAttribute('data-idx'));
+      if (idx > 0 && itemsByStore[storeId]) {
+        swapShoppingItemsOrder(itemsByStore[storeId], idx, idx - 1);
+      }
+    });
+  });
+
+  shoppingListContainer.querySelectorAll('.move-down-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const storeId = btn.getAttribute('data-store-id');
+      const idx = parseInt(btn.getAttribute('data-idx'));
+      if (itemsByStore[storeId] && idx < itemsByStore[storeId].length - 1) {
+        swapShoppingItemsOrder(itemsByStore[storeId], idx, idx + 1);
+      }
+    });
+  });
+}
+
+function swapShoppingItemsOrder(itemsList, idxA, idxB) {
+  const itemA = itemsList[idxA];
+  const itemB = itemsList[idxB];
+  if (!itemA || !itemB) return;
+
+  const tempOrder = itemA.orderIndex;
+  itemA.orderIndex = itemB.orderIndex;
+  itemB.orderIndex = tempOrder;
+
+  // Persist order values into state
+  [itemA, itemB].forEach(item => {
+    if (item.isExtra) {
+      const target = state.extraShoppingItems.find(i => i.id === item.id);
+      if (target) target.order = item.orderIndex;
+    } else {
+      const dayData = normalizeDayData(state.currentPlan.days[item.dayKey]);
+      const dish = dayData.dishes.find(d => d.id === item.dishId);
+      if (dish && dish.ingredients) {
+        const ing = dish.ingredients.find(i => i.id === item.id);
+        if (ing) ing.order = item.orderIndex;
+      }
+    }
+  });
+
+  state.saveLocal();
+  renderShoppingPage();
+}
+
+function renderExtraShoppingItems() {
+  const storeSelect = document.getElementById('extra-item-store-select');
+  const container = document.getElementById('extra-items-list-container');
+  if (storeSelect) {
+    const sortedStores = getSortedStoresByUsage();
+    storeSelect.innerHTML = sortedStores.map(s => `<option value="${s.id}">${escapeHtml(s.name)}</option>`).join('');
+  }
+
+  if (container) {
+    if (!state.extraShoppingItems || state.extraShoppingItems.length === 0) {
+      container.innerHTML = `<span style="font-size:0.8rem;color:var(--text-subtle);">日常品メモは登録されていません</span>`;
+      return;
+    }
+
+    container.innerHTML = state.extraShoppingItems.map((item, idx) => {
+      const store = state.stores.find(s => s.id === item.storeId) || { name: 'その他', cssClass: 'tag-other', color: '#64748b' };
+      return `
+        <div class="ingredient-chip ${item.checked ? 'checked' : ''}" style="padding:6px 12px;display:inline-flex;align-items:center;gap:6px;${item.checked ? 'opacity:0.6;text-decoration:line-through;' : ''}">
+          <span>${escapeHtml(item.name)}</span>
+          <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
+          <button type="button" class="delete-extra-btn" data-idx="${idx}" style="background:none;border:none;color:#f43f5e;cursor:pointer;padding:2px;" title="削除">
+            <i data-lucide="x" style="width:12px;height:12px;"></i>
+          </button>
+        </div>
+      `;
+    }).join('');
+
+    if (window.lucide) window.lucide.createIcons();
+
+    container.querySelectorAll('.delete-extra-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.getAttribute('data-idx'));
+        state.extraShoppingItems.splice(idx, 1);
+        state.saveLocal();
+        renderShoppingPage();
+        showToast('買い物メモを削除しました');
+      });
+    });
+  }
 }
 
 /* ==========================================================================
@@ -836,10 +1035,13 @@ function setupEventListeners() {
         const daysKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
         daysKeys.forEach(k => {
           state.currentPlan.days[k] = {
-            dish: '',
-            memo: '',
-            rating: 5,
-            ingredients: []
+            dishes: [{
+              id: 'dish_' + Date.now() + Math.random().toString(36).substr(2, 4),
+              title: '',
+              memo: '',
+              rating: 5,
+              ingredients: []
+            }]
           };
         });
         state.saveLocal();
@@ -1113,166 +1315,302 @@ function openEditDayModal(dayKey) {
   state.editingDayKey = dayKey;
   const days = getOrderedDaysOfWeek();
   const dayInfo = days.find(d => d.key === dayKey) || DAYS_OF_WEEK_BASE.find(d => d.key === dayKey);
-  const dayData = state.currentPlan.days[dayKey] || { dish: '', memo: '', rating: 5, ingredients: [] };
+  const dayRaw = state.currentPlan.days[dayKey];
+
+  state.editingDayData = JSON.parse(JSON.stringify(normalizeDayData(dayRaw)));
 
   document.getElementById('modal-day-title').innerText = `${dayInfo.label}の献立・食材編集`;
-  document.getElementById('edit-dish-input').value = dayData.dish || '';
-  document.getElementById('edit-memo-input').value = dayData.memo || '';
-
-  state.editingModalRating = dayData.rating || 5;
-  updateModalStarRatingUI(state.editingModalRating);
-
-  renderModalIngredientsList(dayData.ingredients || []);
+  
+  renderModalDishesList();
 
   const modal = document.getElementById('edit-day-modal');
   modal.classList.add('active');
 }
 
-function updateModalStarRatingUI(rating) {
-  const stars = document.querySelectorAll('#modal-star-rating .star');
-  stars.forEach(s => {
-    const r = parseInt(s.getAttribute('data-rating'));
-    if (r <= rating) {
-      s.classList.add('filled');
-    } else {
-      s.classList.remove('filled');
-    }
-  });
-}
-
-function renderModalIngredientsList(ingredients) {
-  const container = document.getElementById('modal-ingredients-container');
-  if (!container) return;
+function renderModalDishesList() {
+  const container = document.getElementById('modal-dishes-container');
+  if (!container || !state.editingDayData) return;
 
   const sortedStores = getSortedStoresByUsage();
+  const defaultStoreId = sortedStores[0] ? sortedStores[0].id : 'other';
+
+  if (!state.editingDayData.dishes || state.editingDayData.dishes.length === 0) {
+    state.editingDayData.dishes = [{
+      id: 'dish_' + Date.now(),
+      title: '',
+      rating: 5,
+      memo: '',
+      ingredients: []
+    }];
+  }
+
   let html = '';
-  ingredients.forEach((ing, idx) => {
+  state.editingDayData.dishes.forEach((dish, dIdx) => {
     html += `
-      <div class="form-group" style="display:flex;gap:8px;align-items:center;">
-        <input type="text" class="form-input ing-name-input" value="${escapeHtml(ing.name)}" placeholder="食材名 (例: 豚コマ肉 200g)" data-idx="${idx}">
-        <select class="form-select ing-store-select" data-idx="${idx}" style="width:140px;">
-          ${sortedStores.map(s => `
-            <option value="${s.id}" ${ing.storeId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>
+      <div class="dish-edit-block" data-dish-idx="${dIdx}" style="background:#fff5f7;border:1px solid #fecdd3;border-radius:var(--radius-md);padding:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-weight:800;font-size:0.95rem;color:#372e2d;">
+            メニュー品目 #${dIdx + 1}
+          </div>
+          ${state.editingDayData.dishes.length > 1 ? `
+            <button type="button" class="btn btn-secondary btn-sm remove-dish-btn" data-dish-idx="${dIdx}" style="color:#f43f5e;font-size:0.75rem;padding:3px 8px;border-color:rgba(244,63,94,0.3);">
+              <i data-lucide="trash-2" style="width:12px;height:12px;"></i> 品目を削除
+            </button>
+          ` : ''}
+        </div>
+
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label" style="font-size:0.8rem;">料理名・品目名 (例: 特製ハンバーグ, 具だくさん豚汁)</label>
+          <input type="text" class="form-input dish-title-input" value="${escapeHtml(dish.title)}" placeholder="例: 特製ハンバーグ" data-dish-idx="${dIdx}">
+        </div>
+
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:10px;flex-wrap:wrap;">
+          <div>
+            <label class="form-label" style="font-size:0.8rem;margin-bottom:4px;">おすすめ度（星評価）</label>
+            <div class="star-rating-input dish-star-rating" data-dish-idx="${dIdx}">
+              ${[1, 2, 3, 4, 5].map(star => `
+                <span class="star ${star <= (dish.rating || 5) ? 'filled' : ''}" data-dish-idx="${dIdx}" data-rating="${star}">★</span>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group" style="margin-bottom:10px;">
+          <label class="form-label" style="font-size:0.8rem;">メモ・レシピ案</label>
+          <input type="text" class="form-input dish-memo-input" value="${escapeHtml(dish.memo || '')}" placeholder="例: 和風おろしソースで召し上がる" data-dish-idx="${dIdx}">
+        </div>
+
+        <!-- Ingredients list for this dish -->
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;margin-bottom:6px;">
+          <span style="font-size:0.82rem;font-weight:700;color:var(--text-muted);">必要食材と購入スーパー</span>
+          <div style="display:flex;gap:6px;">
+            <button type="button" class="btn btn-secondary btn-sm clear-dish-ings-btn" data-dish-idx="${dIdx}" style="color:#f43f5e;font-size:0.72rem;padding:2px 6px;">
+              一括全削除
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm add-dish-ing-btn" data-dish-idx="${dIdx}" style="color:var(--accent-rose);font-size:0.75rem;padding:3px 8px;">
+              <i data-lucide="plus" style="width:12px;height:12px;"></i> 食材を追加
+            </button>
+          </div>
+        </div>
+
+        <div class="dish-ingredients-container" data-dish-idx="${dIdx}">
+          ${(dish.ingredients || []).map((ing, iIdx) => `
+            <div class="form-group" style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">
+              <input type="text" class="form-input ing-name-input" value="${escapeHtml(ing.name)}" placeholder="食材名 (例: 豚コマ 200g)" data-dish-idx="${dIdx}" data-ing-idx="${iIdx}" style="padding:6px 10px;font-size:0.85rem;">
+              <select class="form-select ing-store-select" data-dish-idx="${dIdx}" data-ing-idx="${iIdx}" style="width:120px;padding:6px 10px;font-size:0.85rem;">
+                ${sortedStores.map(s => `
+                  <option value="${s.id}" ${ing.storeId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>
+                `).join('')}
+              </select>
+              <button type="button" class="btn btn-secondary btn-sm remove-ing-btn" data-dish-idx="${dIdx}" data-ing-idx="${iIdx}" style="color:#f43f5e;padding:4px 8px;">
+                削除
+              </button>
+            </div>
           `).join('')}
-        </select>
-        <button class="btn btn-secondary btn-sm remove-ing-btn" data-idx="${idx}" style="color:#f43f5e;">
-          削除
-        </button>
+        </div>
       </div>
     `;
   });
 
   container.innerHTML = html;
+  if (window.lucide) window.lucide.createIcons();
 
-  // Event to remove ingredient row
-  container.querySelectorAll('.remove-ing-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      syncModalDOMToState();
-      const idx = parseInt(btn.getAttribute('data-idx'));
-      const dayData = state.currentPlan.days[state.editingDayKey];
-      if (dayData && dayData.ingredients) {
-        dayData.ingredients.splice(idx, 1);
-        renderModalIngredientsList(dayData.ingredients);
+  // Attach event handlers for multi-dish modal elements
+  container.querySelectorAll('.dish-title-input').forEach(input => {
+    input.addEventListener('input', (e) => {
+      const dIdx = parseInt(input.getAttribute('data-dish-idx'));
+      if (state.editingDayData.dishes[dIdx]) {
+        state.editingDayData.dishes[dIdx].title = e.target.value;
       }
     });
   });
-}
 
-function syncModalDOMToState() {
-  if (!state.editingDayKey || !state.currentPlan || !state.currentPlan.days) return;
-  const dayData = state.currentPlan.days[state.editingDayKey];
-  if (!dayData) return;
-
-  const nameInputs = document.querySelectorAll('.ing-name-input');
-  const storeSelects = document.querySelectorAll('.ing-store-select');
-
-  const sortedStores = getSortedStoresByUsage();
-  const defaultStoreId = sortedStores[0] ? sortedStores[0].id : 'other';
-
-  const syncedIngredients = [];
-  nameInputs.forEach((input, idx) => {
-    const val = input.value;
-    const storeVal = storeSelects[idx] ? storeSelects[idx].value : defaultStoreId;
-    syncedIngredients.push({
-      id: dayData.ingredients && dayData.ingredients[idx] ? dayData.ingredients[idx].id : 'ing_' + Date.now() + idx,
-      name: val,
-      storeId: storeVal,
-      checked: dayData.ingredients && dayData.ingredients[idx] ? dayData.ingredients[idx].checked : false
+  container.querySelectorAll('.dish-memo-input').forEach(input => {
+    input.addEventListener('input', (e) => {
+      const dIdx = parseInt(input.getAttribute('data-dish-idx'));
+      if (state.editingDayData.dishes[dIdx]) {
+        state.editingDayData.dishes[dIdx].memo = e.target.value;
+      }
     });
   });
 
-  dayData.ingredients = syncedIngredients;
+  container.querySelectorAll('.dish-star-rating .star').forEach(star => {
+    star.addEventListener('click', () => {
+      const dIdx = parseInt(star.getAttribute('data-dish-idx'));
+      const rating = parseInt(star.getAttribute('data-rating'));
+      if (state.editingDayData.dishes[dIdx]) {
+        state.editingDayData.dishes[dIdx].rating = rating;
+        renderModalDishesList();
+      }
+    });
+  });
+
+  container.querySelectorAll('.ing-name-input').forEach(input => {
+    input.addEventListener('input', (e) => {
+      const dIdx = parseInt(input.getAttribute('data-dish-idx'));
+      const iIdx = parseInt(input.getAttribute('data-ing-idx'));
+      if (state.editingDayData.dishes[dIdx] && state.editingDayData.dishes[dIdx].ingredients[iIdx]) {
+        state.editingDayData.dishes[dIdx].ingredients[iIdx].name = e.target.value;
+      }
+    });
+  });
+
+  container.querySelectorAll('.ing-store-select').forEach(select => {
+    select.addEventListener('change', (e) => {
+      const dIdx = parseInt(select.getAttribute('data-dish-idx'));
+      const iIdx = parseInt(select.getAttribute('data-ing-idx'));
+      if (state.editingDayData.dishes[dIdx] && state.editingDayData.dishes[dIdx].ingredients[iIdx]) {
+        state.editingDayData.dishes[dIdx].ingredients[iIdx].storeId = e.target.value;
+      }
+    });
+  });
+
+  container.querySelectorAll('.remove-ing-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dIdx = parseInt(btn.getAttribute('data-dish-idx'));
+      const iIdx = parseInt(btn.getAttribute('data-ing-idx'));
+      if (state.editingDayData.dishes[dIdx] && state.editingDayData.dishes[dIdx].ingredients) {
+        state.editingDayData.dishes[dIdx].ingredients.splice(iIdx, 1);
+        renderModalDishesList();
+      }
+    });
+  });
+
+  container.querySelectorAll('.clear-dish-ings-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dIdx = parseInt(btn.getAttribute('data-dish-idx'));
+      if (state.editingDayData.dishes[dIdx]) {
+        state.editingDayData.dishes[dIdx].ingredients = [];
+        renderModalDishesList();
+      }
+    });
+  });
+
+  container.querySelectorAll('.add-dish-ing-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dIdx = parseInt(btn.getAttribute('data-dish-idx'));
+      if (state.editingDayData.dishes[dIdx]) {
+        if (!state.editingDayData.dishes[dIdx].ingredients) {
+          state.editingDayData.dishes[dIdx].ingredients = [];
+        }
+        state.editingDayData.dishes[dIdx].ingredients.push({
+          id: 'ing_' + Date.now() + Math.random().toString(36).substr(2, 4),
+          name: '',
+          storeId: defaultStoreId,
+          checked: false
+        });
+        renderModalDishesList();
+      }
+    });
+  });
+
+  container.querySelectorAll('.remove-dish-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dIdx = parseInt(btn.getAttribute('data-dish-idx'));
+      if (state.editingDayData.dishes.length > 1) {
+        state.editingDayData.dishes.splice(dIdx, 1);
+        renderModalDishesList();
+      }
+    });
+  });
 }
 
 function setupModalHandlers() {
   const modal = document.getElementById('edit-day-modal');
   const closeBtn = document.getElementById('close-modal-btn');
   const saveBtn = document.getElementById('save-modal-btn');
-  const addIngBtn = document.getElementById('add-ingredient-row-btn');
+  const addDishBlockBtn = document.getElementById('add-dish-block-btn');
 
   if (closeBtn) {
     closeBtn.addEventListener('click', () => modal.classList.remove('active'));
   }
 
-  const modalStars = document.querySelectorAll('#modal-star-rating .star');
-  modalStars.forEach(s => {
-    s.addEventListener('click', () => {
-      const r = parseInt(s.getAttribute('data-rating'));
-      state.editingModalRating = r;
-      updateModalStarRatingUI(r);
-    });
-  });
-
-  // Bulk clear day ingredients handler
-  const clearDayIngsBtn = document.getElementById('clear-day-ingredients-btn');
-  if (clearDayIngsBtn) {
-    clearDayIngsBtn.addEventListener('click', () => {
-      if (!state.editingDayKey) return;
-      const dayData = state.currentPlan.days[state.editingDayKey];
-      if (dayData && dayData.ingredients && dayData.ingredients.length > 0) {
-        if (confirm('この曜日の登録食材をすべて一括全削除しますか？')) {
-          dayData.ingredients = [];
-          renderModalIngredientsList([]);
-          showToast('登録食材を一括全削除しました');
-        }
-      } else {
-        showToast('削除対象の食材がありません');
-      }
-    });
-  }
-
-  if (addIngBtn) {
-    addIngBtn.addEventListener('click', () => {
-      syncModalDOMToState();
-      const dayData = state.currentPlan.days[state.editingDayKey];
-      if (!dayData.ingredients) dayData.ingredients = [];
-      const sortedStores = getSortedStoresByUsage();
-      const defaultStoreId = sortedStores[0] ? sortedStores[0].id : 'other';
-      dayData.ingredients.push({
-        id: 'ing_' + Date.now() + Math.random().toString(36).substr(2, 4),
-        name: '',
-        storeId: defaultStoreId,
-        checked: false
+  if (addDishBlockBtn) {
+    addDishBlockBtn.addEventListener('click', () => {
+      if (!state.editingDayData) return;
+      state.editingDayData.dishes.push({
+        id: 'dish_' + Date.now(),
+        title: '',
+        rating: 5,
+        memo: '',
+        ingredients: []
       });
-      renderModalIngredientsList(dayData.ingredients);
+      renderModalDishesList();
     });
   }
 
   if (saveBtn) {
     saveBtn.addEventListener('click', () => {
-      syncModalDOMToState();
-      const dayData = state.currentPlan.days[state.editingDayKey];
-      dayData.dish = document.getElementById('edit-dish-input').value;
-      dayData.memo = document.getElementById('edit-memo-input').value;
-      dayData.rating = state.editingModalRating || 5;
+      if (!state.editingDayKey || !state.editingDayData) return;
 
-      // Filter out empty ingredient names
-      dayData.ingredients = dayData.ingredients.filter(i => i.name.trim() !== '');
+      // Filter empty ingredients
+      state.editingDayData.dishes.forEach(d => {
+        if (d.ingredients) {
+          d.ingredients = d.ingredients.filter(ing => ing.name.trim() !== '');
+        }
+      });
 
+      // Filter out completely empty dishes unless it's the only one
+      state.editingDayData.dishes = state.editingDayData.dishes.filter(d => 
+        d.title.trim() !== '' || (d.ingredients && d.ingredients.length > 0) || d.memo.trim() !== ''
+      );
+
+      if (state.editingDayData.dishes.length === 0) {
+        state.editingDayData.dishes = [{
+          id: 'dish_' + Date.now(),
+          title: '',
+          rating: 5,
+          memo: '',
+          ingredients: []
+        }];
+      }
+
+      state.currentPlan.days[state.editingDayKey] = state.editingDayData;
       state.saveLocal();
       modal.classList.remove('active');
       renderApp();
-      showToast('献立と食材を更新しました！');
+      showToast('献立と食材を保存しました！');
+    });
+  }
+
+  // Non-menu Extra Shopping Form Handlers
+  const addExtraForm = document.getElementById('add-extra-item-form');
+  if (addExtraForm) {
+    addExtraForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('extra-item-name-input');
+      const select = document.getElementById('extra-item-store-select');
+      const val = input.value.trim();
+      if (!val) return;
+
+      if (!state.extraShoppingItems) state.extraShoppingItems = [];
+      state.extraShoppingItems.push({
+        id: 'extra_' + Date.now() + Math.random().toString(36).substr(2, 4),
+        name: val,
+        storeId: select ? select.value : 'other',
+        checked: false
+      });
+
+      state.saveLocal();
+      input.value = '';
+      showToast(`買い物メモ「${val}」を追加しました！`);
+      renderShoppingPage();
+    });
+  }
+
+  const clearExtraItemsBtn = document.getElementById('clear-extra-items-btn');
+  if (clearExtraItemsBtn) {
+    clearExtraItemsBtn.addEventListener('click', () => {
+      if (!state.extraShoppingItems || state.extraShoppingItems.length === 0) {
+        showToast('削除するメモがありません');
+        return;
+      }
+      if (confirm('日常品・その他買い物メモをすべて全削除しますか？')) {
+        state.extraShoppingItems = [];
+        state.saveLocal();
+        renderShoppingPage();
+        showToast('買い物メモを一括削除しました');
+      }
     });
   }
 }
