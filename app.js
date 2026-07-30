@@ -301,7 +301,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.2',
+      version: '2.0.3',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -334,7 +334,7 @@ class AppState {
 const state = new AppState();
 
 // Initialize App & Event Listeners
-document.addEventListener('DOMContentLoaded', async () => {
+async function initApp() {
   renderApp();
   setupNavigation();
   setupEventListeners();
@@ -361,7 +361,13 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     updateSyncStatusUI('offline', 'ローカル保存');
   }
-});
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
 
 function initIcons() {
   if (window.lucide) {
