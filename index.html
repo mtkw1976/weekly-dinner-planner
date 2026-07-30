@@ -37,12 +37,12 @@
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <span class="brand-title">献立＆買い物ノート ✨</span>
-          <span class="version-badge">v2.1.4</span>
+          <span class="version-badge">v2.2.0</span>
         </div>
       </div>
       <div class="header-actions">
-        <div id="sync-status" class="sync-status-badge offline">
-          <i data-lucide="cloud" style="width:14px;height:14px;"></i>
+        <div id="sync-status-indicator" class="sync-indicator local" title="ローカル保存中">
+          <i data-lucide="hard-drive" style="width:12px;height:12px;"></i>
           <span id="sync-status-text">ローカル保存</span>
         </div>
       </div>
@@ -50,18 +50,19 @@
 
     <!-- Main Dynamic Pages -->
     <main class="main-content">
+      <div class="container">
 
       <!-- PAGE 1: Weekly Dinner Planner -->
-      <section id="page-planner" class="page active">
-        <div class="section-title-row">
-          <div class="section-title">
-            <i data-lucide="calendar-range" style="color:var(--accent-rose);"></i>
-            今週のディナー献立
+      <section id="page-planner" class="page-content active">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+          <div>
+            <h2 class="section-title">今週の夕食献立</h2>
+            <p class="section-desc">1週間分のメニューと必要な食材をまとめて管理しましょう</p>
           </div>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button id="archive-current-plan-btn" class="btn btn-primary btn-sm">
-              <i data-lucide="bookmark-plus" style="width:14px;height:14px;"></i>
-              履歴に保存
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+            <button id="add-dish-global-btn" class="btn btn-primary btn-sm">
+              <i data-lucide="plus" style="width:14px;height:14px;"></i>
+              献立を追加
             </button>
             <button id="clear-all-plan-btn" class="btn btn-secondary btn-sm" style="color:#f43f5e;border-color:rgba(244,63,94,0.3);">
               <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
@@ -70,11 +71,26 @@
           </div>
         </div>
 
-        <div style="display:flex;justify-content:center;margin-bottom:16px;">
-          <div class="date-navigator">
-            <i data-lucide="calendar" style="width:16px;height:16px;color:var(--accent-rose);"></i>
-            <span id="planner-date-range" class="date-text">2026/7/27 (月) 〜 8/2 (日)</span>
+        <!-- Week Navigator & Picker -->
+        <div class="week-navigator-container" style="display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+          <button id="prev-week-btn" class="btn btn-secondary btn-sm" style="display:inline-flex;align-items:center;gap:4px;padding:6px 12px;font-weight:700;">
+            <i data-lucide="chevron-left" style="width:16px;height:16px;"></i> 前の週
+          </button>
+          
+          <div class="date-navigator" style="position:relative;display:inline-flex;align-items:center;gap:8px;padding:8px 16px;background:#ffffff;border:1px solid #ffe4e6;border-radius:var(--radius-full);box-shadow:0 2px 8px rgba(255,117,143,0.1);cursor:pointer;" title="クリックしてカレンダーから週を指定">
+            <i data-lucide="calendar" style="width:18px;height:18px;color:var(--accent-rose);"></i>
+            <span id="planner-date-range" class="date-text" style="font-weight:800;font-size:0.92rem;color:#372e2d;">日付読込中...</span>
+            <i data-lucide="calendar-days" style="width:16px;height:16px;color:#ff758f;"></i>
+            <input type="date" id="week-date-picker" style="position:absolute;top:0;left:0;width:100%;height:100%;opacity:0;cursor:pointer;" title="日付を選んで週を指定">
           </div>
+
+          <button id="next-week-btn" class="btn btn-secondary btn-sm" style="display:inline-flex;align-items:center;gap:4px;padding:6px 12px;font-weight:700;">
+            次の週 <i data-lucide="chevron-right" style="width:16px;height:16px;"></i>
+          </button>
+
+          <button id="today-week-btn" class="btn btn-primary btn-sm" style="display:inline-flex;align-items:center;gap:4px;padding:6px 12px;font-size:0.8rem;white-space:nowrap;">
+            <i data-lucide="rotate-ccw" style="width:13px;height:13px;"></i> 今週へ
+          </button>
         </div>
 
         <!-- Non-Menu Extra Shopping Memo Card -->

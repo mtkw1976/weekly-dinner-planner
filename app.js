@@ -294,14 +294,38 @@ class AppState {
     this.stores = (Array.isArray(JSON.parse(localStorage.getItem('stores'))) && JSON.parse(localStorage.getItem('stores')).length > 0)
       ? JSON.parse(localStorage.getItem('stores'))
       : DEFAULT_STORES;
-    this.currentPlan = sanitizeWeeklyPlan(JSON.parse(localStorage.getItem('current_plan')));
+    this.startDayOfWeek = localStorage.getItem('week_start_day') || 'mon';
+
+    // Selected week start date (YYYY-MM-DD)
+    const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek).toISOString().split('T')[0];
+    this.selectedWeekStartDate = localStorage.getItem('selected_week_start_date') || todayWeekStart;
+
+    this.plansByWeek = {};
+    try {
+      const savedPlans = JSON.parse(localStorage.getItem('plans_by_week'));
+      if (savedPlans && typeof savedPlans === 'object') {
+        this.plansByWeek = savedPlans;
+      }
+    } catch (e) {}
+
+    // Migration fallback for single current_plan
+    const savedCurrent = JSON.parse(localStorage.getItem('current_plan'));
+    if (savedCurrent) {
+      const sanitized = sanitizeWeeklyPlan(savedCurrent);
+      const planStart = sanitized.startDate || todayWeekStart;
+      if (!this.plansByWeek[planStart]) {
+        this.plansByWeek[planStart] = sanitized;
+      }
+    }
+
+    this.ensureWeekPlan(this.selectedWeekStartDate);
+
     this.history = Array.isArray(JSON.parse(localStorage.getItem('history_plans')))
       ? JSON.parse(localStorage.getItem('history_plans'))
       : [];
     this.extraShoppingItems = Array.isArray(JSON.parse(localStorage.getItem('extra_shopping_items')))
       ? JSON.parse(localStorage.getItem('extra_shopping_items'))
       : [];
-    this.startDayOfWeek = localStorage.getItem('week_start_day') || 'mon';
     this.activeTab = 'planner'; // planner, shopping, history, settings
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
@@ -310,8 +334,73 @@ class AppState {
     this.lastDebugData = null;
   }
 
+  get currentPlan() {
+    return this.ensureWeekPlan(this.selectedWeekStartDate);
+  }
+
+  set currentPlan(val) {
+    if (val && this.selectedWeekStartDate) {
+      this.plansByWeek[this.selectedWeekStartDate] = sanitizeWeeklyPlan(val);
+    }
+  }
+
+  ensureWeekPlan(weekStartDateStr) {
+    if (!this.plansByWeek[weekStartDateStr]) {
+      const newPlan = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN));
+      newPlan.id = 'plan_' + weekStartDateStr;
+      newPlan.startDate = weekStartDateStr;
+      const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek).toISOString().split('T')[0];
+      if (weekStartDateStr !== todayWeekStart) {
+        Object.keys(newPlan.days).forEach(k => {
+          newPlan.days[k] = {
+            dishes: [{
+              id: 'dish_' + weekStartDateStr + '_' + k,
+              title: '',
+              rating: 5,
+              memo: '',
+              ingredients: []
+            }]
+          };
+        });
+      }
+      this.plansByWeek[weekStartDateStr] = sanitizeWeeklyPlan(newPlan);
+    } else {
+      this.plansByWeek[weekStartDateStr] = sanitizeWeeklyPlan(this.plansByWeek[weekStartDateStr]);
+    }
+    return this.plansByWeek[weekStartDateStr];
+  }
+
+  changeSelectedWeek(deltaDays) {
+    const current = new Date(this.selectedWeekStartDate + 'T00:00:00');
+    current.setDate(current.getDate() + deltaDays);
+    const newStart = getWeekStartDate(current, this.startDayOfWeek).toISOString().split('T')[0];
+    this.selectedWeekStartDate = newStart;
+    this.ensureWeekPlan(newStart);
+    this.saveLocal();
+    renderApp();
+  }
+
+  selectWeekByDate(targetDateStr) {
+    if (!targetDateStr) return;
+    const newStart = getWeekStartDate(new Date(targetDateStr + 'T00:00:00'), this.startDayOfWeek).toISOString().split('T')[0];
+    this.selectedWeekStartDate = newStart;
+    this.ensureWeekPlan(newStart);
+    this.saveLocal();
+    renderApp();
+  }
+
+  jumpToCurrentWeek() {
+    const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek).toISOString().split('T')[0];
+    this.selectedWeekStartDate = todayWeekStart;
+    this.ensureWeekPlan(todayWeekStart);
+    this.saveLocal();
+    renderApp();
+  }
+
   saveLocal(skipDriveSync = false) {
     localStorage.setItem('stores', JSON.stringify(this.stores));
+    localStorage.setItem('selected_week_start_date', this.selectedWeekStartDate);
+    localStorage.setItem('plans_by_week', JSON.stringify(this.plansByWeek));
     localStorage.setItem('current_plan', JSON.stringify(this.currentPlan));
     localStorage.setItem('history_plans', JSON.stringify(this.history));
     localStorage.setItem('extra_shopping_items', JSON.stringify(this.extraShoppingItems));
@@ -336,10 +425,12 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.1.4',
+      version: '2.2.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
+      selectedWeekStartDate: this.selectedWeekStartDate,
       stores: this.stores,
+      plansByWeek: this.plansByWeek,
       currentPlan: this.currentPlan,
       history: this.history,
       extraShoppingItems: this.extraShoppingItems
@@ -349,8 +440,12 @@ class AppState {
   importAllData(data, skipDriveSync = false) {
     if (!data) return false;
     if (data.startDayOfWeek) this.startDayOfWeek = data.startDayOfWeek;
+    if (data.selectedWeekStartDate) this.selectedWeekStartDate = data.selectedWeekStartDate;
     if (data.stores && Array.isArray(data.stores) && data.stores.length > 0) {
       this.stores = data.stores;
+    }
+    if (data.plansByWeek && typeof data.plansByWeek === 'object') {
+      this.plansByWeek = data.plansByWeek;
     }
     if (data.currentPlan && data.currentPlan.days) {
       this.currentPlan = data.currentPlan;
@@ -367,6 +462,7 @@ class AppState {
 }
 
 const state = new AppState();
+window.state = state;
 
 // Initialize App & Event Listeners
 async function initApp() {
@@ -500,23 +596,38 @@ function renderApp() {
 function renderPlannerPage() {
   const container = document.getElementById('planner-cards-container');
   const dateRangeEl = document.getElementById('planner-date-range');
+  const datePickerEl = document.getElementById('week-date-picker');
   if (!container || !dateRangeEl) return;
 
   renderExtraShoppingItems();
 
-  if (!state.currentPlan || !state.currentPlan.days) {
-    state.currentPlan = DEFAULT_WEEKLY_PLAN;
+  const weekStartDate = new Date(state.selectedWeekStartDate + 'T00:00:00');
+  const weekEndDate = new Date(weekStartDate);
+  weekEndDate.setDate(weekEndDate.getDate() + 6);
+
+  const todayWeekStart = getWeekStartDate(new Date(), state.startDayOfWeek).toISOString().split('T')[0];
+  const isCurrentWeek = (state.selectedWeekStartDate === todayWeekStart);
+
+  const days = getOrderedDaysOfWeek();
+  const startDayShort = days[0] ? days[0].short : '月';
+  const endDayShort = days[6] ? days[6].short : '日';
+
+  const dateRangeText = `${weekStartDate.getFullYear()}/${weekStartDate.getMonth() + 1}/${weekStartDate.getDate()}(${startDayShort}) 〜 ${weekEndDate.getMonth() + 1}/${weekEndDate.getDate()}(${endDayShort})`;
+  
+  dateRangeEl.innerHTML = `${dateRangeText} ${isCurrentWeek ? '<span style="background:var(--accent-rose-gradient);color:white;font-size:0.72rem;padding:2px 8px;border-radius:12px;margin-left:6px;font-weight:800;">今週</span>' : ''}`;
+
+  if (datePickerEl) {
+    datePickerEl.value = state.selectedWeekStartDate;
   }
 
-  const startDate = state.currentPlan.startDate || new Date().toISOString();
-  dateRangeEl.innerText = formatDateRange(startDate);
-
   let html = '';
-  const days = getOrderedDaysOfWeek();
   days.forEach(dayInfo => {
     const dayRaw = state.currentPlan.days[dayInfo.key];
     const dayData = normalizeDayData(dayRaw);
-    const isToday = checkIsToday(state.currentPlan.startDate, dayInfo.key);
+    const dayDate = getDayDateInWeek(weekStartDate, dayInfo.key);
+    const dateFormatted = `${dayDate.getMonth() + 1}/${dayDate.getDate()}`;
+
+    const isToday = checkIsToday(state.selectedWeekStartDate, dayInfo.key);
 
     let dishesHtml = '';
     if (dayData.dishes && dayData.dishes.length > 0) {
@@ -556,10 +667,10 @@ function renderPlannerPage() {
         <div class="dinner-card-header">
           <span class="day-badge ${isToday ? 'today' : ''}">
             <i data-lucide="calendar" style="width:14px;height:14px;"></i>
-            ${dayInfo.label} ${isToday ? '(本日)' : ''}
+            ${dayInfo.label} (${dateFormatted}) ${isToday ? '(本日)' : ''}
           </span>
-          <button class="btn btn-secondary btn-sm edit-day-btn" data-day="${dayInfo.key}">
-            <i data-lucide="edit-3" style="width:14px;height:14px;"></i> 編集
+          <button type="button" class="btn btn-secondary btn-sm add-dish-btn" data-day="${dayInfo.key}" style="font-size:0.78rem;padding:4px 8px;">
+            <i data-lucide="plus" style="width:12px;height:12px;"></i> メニュー編集・追加
           </button>
         </div>
 
@@ -1218,6 +1329,27 @@ function renderStoreTagsManageList() {
    Modal & Event Handlers
    ========================================================================== */
 function setupEventListeners() {
+  // Week navigation button handlers
+  const prevWeekBtn = document.getElementById('prev-week-btn');
+  if (prevWeekBtn) {
+    prevWeekBtn.addEventListener('click', () => state.changeSelectedWeek(-7));
+  }
+
+  const nextWeekBtn = document.getElementById('next-week-btn');
+  if (nextWeekBtn) {
+    nextWeekBtn.addEventListener('click', () => state.changeSelectedWeek(7));
+  }
+
+  const todayWeekBtn = document.getElementById('today-week-btn');
+  if (todayWeekBtn) {
+    todayWeekBtn.addEventListener('click', () => state.jumpToCurrentWeek());
+  }
+
+  const weekDatePicker = document.getElementById('week-date-picker');
+  if (weekDatePicker) {
+    weekDatePicker.addEventListener('change', (e) => state.selectWeekByDate(e.target.value));
+  }
+
   // Start day of week setting handler
   const startDaySelect = document.getElementById('start-day-select');
   if (startDaySelect) {

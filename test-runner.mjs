@@ -41,38 +41,57 @@ server.listen(8080, async () => {
     await page.goto('http://localhost:8080/index.html');
     await page.waitForTimeout(1000);
 
-    // Navigate to shopping tab
-    await page.click('[data-tab="shopping"]');
-    await page.waitForTimeout(500);
+    console.log('--- BROWSER CONSOLE LOGS ---');
+    consoleLogs.forEach(l => console.log(l));
 
-    const sectionRows = page.locator('#shopping-list-container .shopping-section[data-store-id="greengrocer"] .shopping-item-row');
-    const rowCount = await sectionRows.count();
-    console.log(`Greengrocer store items count: ${rowCount}`);
+    console.log('--- PAGE UNCAUGHT ERRORS ---');
+    pageErrors.forEach(e => console.log(e));
 
-    if (rowCount >= 2) {
-      const item0Before = await sectionRows.nth(0).locator('.shopping-item-name').innerText();
-      const item1Before = await sectionRows.nth(1).locator('.shopping-item-name').innerText();
-      console.log(`BEFORE REORDER: Item 0 = "${item0Before}", Item 1 = "${item1Before}"`);
+    const plannerCardsCount = await page.locator('.dinner-card').count();
+    console.log(`Planner cards count: ${plannerCardsCount}`);
 
-      // Call reorderStoreItems
-      const res = await page.evaluate(() => {
-        if (window.itemsByStore && window.itemsByStore['greengrocer']) {
-          window.reorderStoreItems(window.itemsByStore['greengrocer'], 0, 1);
-          return 'REORDERED_OK';
-        }
-        return 'ITEMS_BY_STORE_NOT_FOUND';
-      });
-      console.log(`reorderStoreItems execution status: ${res}`);
+    const navButtonsCount = await page.locator('.nav-item').count();
+    console.log(`Nav buttons count: ${navButtonsCount}`);
 
-      await page.waitForTimeout(500);
+    // TEST 1: Extra Memo Card on #page-planner ("今週の献立")
+    console.log('\n--- TESTING PLANNER TAB EXTRA MEMO CARD LOCATION ---');
+    const memoHeaderInPlanner = await page.locator('#page-planner h3', { hasText: '日常品・その他買い物メモ（献立以外）' }).count();
+    console.log(`Extra Memo Header Count on #page-planner: ${memoHeaderInPlanner}`);
 
-      const item0After = await sectionRows.nth(0).locator('.shopping-item-name').innerText();
-      const item1After = await sectionRows.nth(1).locator('.shopping-item-name').innerText();
-      console.log(`AFTER REORDER: Item 0 = "${item0After}", Item 1 = "${item1After}"`);
+    // TEST 2: Week Selection & Navigation Controls
+    console.log('\n--- TESTING WEEK SELECTION & NAVIGATION CONTROLS ---');
+    const initialRange = await page.locator('#planner-date-range').innerText();
+    console.log(`Initial Week Date Range: ${initialRange}`);
 
-      const didSwap = (item0After === item1Before && item1After === item0Before);
-      console.log(`Drag & Drop / Reordering locked position successfully: ${didSwap ? 'YES' : 'NO'}`);
-    }
+    // Click "前の週"
+    await page.click('#prev-week-btn');
+    await page.waitForTimeout(300);
+    const prevRange = await page.locator('#planner-date-range').innerText();
+    console.log(`After clicking "前の週": ${prevRange}`);
+
+    // Click "次の週"
+    await page.click('#next-week-btn');
+    await page.waitForTimeout(300);
+    const nextRange = await page.locator('#planner-date-range').innerText();
+    console.log(`After clicking "次の週": ${nextRange}`);
+
+    // Click "今週へ"
+    await page.click('#today-week-btn');
+    await page.waitForTimeout(300);
+    const todayRange = await page.locator('#planner-date-range').innerText();
+    console.log(`After clicking "今週へ": ${todayRange}`);
+
+    const hasTodayBadge = todayRange.includes('今週');
+    console.log(`Current Week badge displayed: ${hasTodayBadge ? 'YES' : 'NO'}`);
+
+    // TEST 3: Calendar Date Picker Jump
+    console.log('\n--- TESTING CALENDAR DATE PICKER JUMP ---');
+    await page.evaluate(() => {
+      window.state.selectWeekByDate('2026-08-10');
+    });
+    await page.waitForTimeout(300);
+    const pickedRange = await page.locator('#planner-date-range').innerText();
+    console.log(`After picking 2026-08-10: ${pickedRange}`);
 
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log('Screenshot saved to test-screenshot.png');
