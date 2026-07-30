@@ -266,7 +266,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.0',
+      version: '2.0.1',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -411,10 +411,10 @@ function switchTab(tabId) {
 
 // Main Render Handler
 function renderApp() {
-  renderPlannerPage();
-  renderShoppingPage();
-  renderHistoryPage();
-  renderSettingsPage();
+  try { renderPlannerPage(); } catch (e) { console.error('Planner render error:', e); }
+  try { renderShoppingPage(); } catch (e) { console.error('Shopping render error:', e); }
+  try { renderHistoryPage(); } catch (e) { console.error('History render error:', e); }
+  try { renderSettingsPage(); } catch (e) { console.error('Settings render error:', e); }
   initIcons();
 }
 
@@ -426,7 +426,12 @@ function renderPlannerPage() {
   const dateRangeEl = document.getElementById('planner-date-range');
   if (!container || !dateRangeEl) return;
 
-  dateRangeEl.innerText = formatDateRange(state.currentPlan.startDate);
+  if (!state.currentPlan || !state.currentPlan.days) {
+    state.currentPlan = DEFAULT_WEEKLY_PLAN;
+  }
+
+  const startDate = state.currentPlan.startDate || new Date().toISOString();
+  dateRangeEl.innerText = formatDateRange(startDate);
 
   let html = '';
   const days = getOrderedDaysOfWeek();
