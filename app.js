@@ -199,7 +199,25 @@ const DEFAULT_WEEKLY_PLAN = {
         { id: 'i21', name: '生ハム', storeId: 'kaldi', checked: false },
         { id: 'i22', name: '粉チーズ & ドレッシング', storeId: 'aeon', checked: false },
         { id: 'i23', name: 'ロメインレタス', storeId: 'greengrocer', checked: false },
- class AppState {
+      ]
+    },
+    sun: {
+      dish: '黒毛和牛の贅沢すき焼き',
+      memo: '1週間の締めくくり！家族みんなで鍋を囲む時間',
+      rating: 5,
+      ingredients: [
+        { id: 'i24', name: 'すき焼き用牛肉 600g', storeId: 'butcher', checked: false },
+        { id: 'i25', name: '長ネギ 2本', storeId: 'greengrocer', checked: false },
+        { id: 'i26', name: '焼き豆腐', storeId: 'life', checked: false },
+        { id: 'i27', name: 'しらたき', storeId: 'gyomu', checked: false },
+        { id: 'i28', name: '卵 1パック', storeId: 'aeon', checked: false },
+      ]
+    }
+  }
+};
+
+// App State Management
+class AppState {
   constructor() {
     this.stores = JSON.parse(localStorage.getItem('stores')) || DEFAULT_STORES;
     this.currentPlan = JSON.parse(localStorage.getItem('current_plan')) || DEFAULT_WEEKLY_PLAN;
@@ -272,39 +290,6 @@ const DEFAULT_WEEKLY_PLAN = {
     }
     if (data.extraShoppingItems && Array.isArray(data.extraShoppingItems)) {
       this.extraShoppingItems = data.extraShoppingItems;
-    }
-    this.saveLocal(skipDriveSync);
-    return true;
-  }st('Google Driveの認証期限が切れました。「クラウド設定」から再ログインしてください。');
-          } else {
-            updateSyncStatusUI('offline', 'ローカル保存');
-          }
-        });
-    }
-  }
-
-  exportAllData() {
-    return {
-      version: '1.7.0',
-      exportedAt: new Date().toISOString(),
-      startDayOfWeek: this.startDayOfWeek,
-      stores: this.stores,
-      currentPlan: this.currentPlan,
-      history: this.history
-    };
-  }
-
-  importAllData(data, skipDriveSync = false) {
-    if (!data) return false;
-    if (data.startDayOfWeek) this.startDayOfWeek = data.startDayOfWeek;
-    if (data.stores && Array.isArray(data.stores) && data.stores.length > 0) {
-      this.stores = data.stores;
-    }
-    if (data.currentPlan && data.currentPlan.days) {
-      this.currentPlan = data.currentPlan;
-    }
-    if (data.history && Array.isArray(data.history)) {
-      this.history = data.history;
     }
     this.saveLocal(skipDriveSync);
     return true;
