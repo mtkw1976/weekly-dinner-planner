@@ -34,6 +34,12 @@ server.listen(8080, async () => {
   const context = await browser.newContext();
   const page = await context.newPage();
 
+  // Auto-dismiss native dialogs (confirm/alert/prompt) so tests complete cleanly
+  page.on('dialog', async dialog => {
+    // console.log(` [Dialog Handled] ${dialog.type()}: "${dialog.message()}"`);
+    await dialog.accept();
+  });
+
   const consoleLogs = [];
   const pageErrors = [];
   let testPassCount = 0;
@@ -183,14 +189,87 @@ server.listen(8080, async () => {
     await page.waitForTimeout(150);
 
 
-    // SECTION 7: Baseline Reference Screenshot Generation
-    console.log('\n--- 7. BASELINE REFERENCE SCREENSHOT GENERATION ---');
+    // SECTION 7: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST
+    console.log('\n--- 7. EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST ---');
+    let totalClickedCount = 0;
+
+    // Helper function to safely click elements matching a selector
+    async function clickAllMatching(description, selector, maxToClick = 50) {
+      const locators = page.locator(selector);
+      const count = await locators.count();
+      let clickedInGroup = 0;
+      for (let i = 0; i < Math.min(count, maxToClick); i++) {
+        try {
+          const el = locators.nth(i);
+          if (await el.isVisible()) {
+            await el.click({ timeout: 1000, force: true });
+            await page.waitForTimeout(50);
+            clickedInGroup++;
+            totalClickedCount++;
+          }
+        } catch (e) {
+          // Element might have re-rendered or been removed by click
+        }
+      }
+      console.log(` 🖱️ Clicked ${clickedInGroup}/${count} elements: ${description} [${selector}]`);
+    }
+
+    // 7.1 Planner Page Click Iteration
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+
+    await clickAllMatching('Planner Header & Toolbar Buttons', '#page-planner button:not(.btn-primary)');
+    await clickAllMatching('Global Add Dish Button', '#add-dish-global-btn');
+    await clickAllMatching('Week Navigation Buttons', '#prev-week-btn, #next-week-btn, #today-week-btn');
+    await clickAllMatching('Extra Memo Buttons & Badges', '#clear-extra-items-btn, .delete-extra-item-btn');
+    await clickAllMatching('Add Dish per Day Buttons', '.add-dish-btn');
+    await clickAllMatching('Add Ingredient per Dish Buttons', '.add-ingredient-btn');
+    await clickAllMatching('Copy & Paste Day Menu Buttons', '.copy-day-btn, .paste-day-btn');
+    await clickAllMatching('Rating Star Buttons', '.star-rating span');
+    await clickAllMatching('Ingredient Checkboxes', '#page-planner .ingredient-checkbox');
+    await clickAllMatching('Ingredient Remove Buttons', '#page-planner .remove-ingredient-btn');
+
+    // 7.2 Shopping List Page Click Iteration
+    await page.click('[data-tab="shopping"]');
+    await page.waitForTimeout(200);
+
+    await clickAllMatching('Supermarket Store Filter Chips', '.store-filter-chip');
+    await clickAllMatching('Clear Checked Items Button', '#clear-checked-items-btn');
+    await clickAllMatching('Shopping Item Checkboxes', '#page-shopping input[type="checkbox"]');
+
+    // 7.3 History Archive Page Click Iteration
+    await page.click('[data-tab="history"]');
+    await page.waitForTimeout(200);
+    await clickAllMatching('History Action Buttons', '#page-history button');
+
+    // 7.4 Settings Page Click Iteration
+    await page.click('[data-tab="settings"]');
+    await page.waitForTimeout(200);
+    await clickAllMatching('Restore Default Stores Button', '#restore-default-stores-btn');
+    await clickAllMatching('Delete Store Tag Buttons', '.delete-store-btn');
+    await clickAllMatching('Google Drive Action Buttons', '#drive-login-btn, #drive-logout-btn, #manual-sync-btn');
+    await clickAllMatching('Export & Import Data Buttons', '#export-json-btn, #import-json-btn');
+
+    // 7.5 Bottom Navigation Bar Tabs Iteration
+    await clickAllMatching('Bottom Navigation Bar Tabs', '.nav-item');
+
+    // Return to Planner Tab
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(300);
+
+    assertTest('Exhaustive Interactive UI Component Clicks', totalClickedCount > 0, `Total interactive components clicked = ${totalClickedCount}`);
+    assertTest('Zero Uncaught Errors After All Clicks', pageErrors.length === 0, `Uncaught errors = ${pageErrors.length}`);
+
+
+    // SECTION 8: BASELINE REFERENCE SCREENSHOT GENERATION
+    console.log('\n--- 8. BASELINE REFERENCE SCREENSHOT GENERATION ---');
     await page.screenshot({ path: 'baseline-reference.png' });
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log(' ✅ PASS: Saved baseline-reference.png');
 
     console.log('\n===========================================================');
     console.log(`  REGRESSION TEST SUMMARY: ${testPassCount} / ${testTotalCount} TESTS PASSED (${Math.round((testPassCount / testTotalCount) * 100)}%)  `);
+    console.log(`  TOTAL INTERACTIVE UI COMPONENTS CLICKED: ${totalClickedCount}  `);
     console.log('===========================================================\n');
 
   } catch (e) {
