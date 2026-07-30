@@ -334,7 +334,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.8',
+      version: '2.0.9',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -751,8 +751,11 @@ function renderShoppingPage() {
         </div>
         <div class="shopping-items-body">
           ${items.map((item, idx) => `
-            <div class="shopping-item-row ${item.checked ? 'checked' : ''}" data-store-id="${store.id}" data-idx="${idx}">
+            <div class="shopping-item-row ${item.checked ? 'checked' : ''}" draggable="true" data-store-id="${store.id}" data-idx="${idx}">
               <div class="shopping-item-left">
+                <div class="drag-handle" title="ドラッグして順序を移動" style="cursor:grab;padding:2px 4px;color:#a39594;display:flex;align-items:center;">
+                  <i data-lucide="grip-vertical" style="width:16px;height:16px;"></i>
+                </div>
                 <div class="custom-checkbox ${item.checked ? 'checked' : ''}" 
                      data-is-extra="${item.isExtra}" data-day="${item.dayKey}" data-dish-id="${item.dishId || ''}" data-ing-id="${item.id}">
                   ${item.checked ? '<i data-lucide="check" style="width:14px;height:14px;"></i>' : ''}
@@ -763,10 +766,6 @@ function renderShoppingPage() {
               </div>
               <div style="display:flex;align-items:center;gap:6px;">
                 <div class="shopping-item-menu" style="font-size:0.75rem;">${escapeHtml(item.sourceTag)}</div>
-                <div style="display:inline-flex;gap:2px;">
-                  <button type="button" class="reorder-btn move-up-btn" data-store-id="${store.id}" data-idx="${idx}" title="上に移動" style="padding:2px 6px;font-size:0.72rem;background:#ffe4e6;border:1px solid #fecdd3;border-radius:4px;cursor:pointer;color:#ff4d6d;font-weight:700;">▲</button>
-                  <button type="button" class="reorder-btn move-down-btn" data-store-id="${store.id}" data-idx="${idx}" title="下に移動" style="padding:2px 6px;font-size:0.72rem;background:#ffe4e6;border:1px solid #fecdd3;border-radius:4px;cursor:pointer;color:#ff4d6d;font-weight:700;">▼</button>
-                </div>
               </div>
             </div>
           `).join('')}
@@ -818,26 +817,134 @@ function renderShoppingPage() {
     });
   });
 
-  // Reorder Item Handlers (Move Up / Move Down)
-  shoppingListContainer.querySelectorAll('.move-up-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const storeId = btn.getAttribute('data-store-id');
-      const idx = parseInt(btn.getAttribute('data-idx'));
-      if (idx > 0 && itemsByStore[storeId]) {
-        swapShoppingItemsOrder(itemsByStore[storeId], idx, idx - 1);
+  // Setup HTML5 Drag and Drop & Mobile Touch Drag Handlers
+  setupShoppingListDragAndDrop(shoppingListContainer, itemsByStore);
+}
+
+function setupShoppingListDragAndDrop(container, itemsByStore) {
+  let draggedRow = null;
+  let draggedStoreId = null;
+  let draggedIdx = null;
+
+  // HTML5 Drag and Drop (Mouse)
+  container.querySelectorAll('.shopping-item-row').forEach(row => {
+    row.addEventListener('dragstart', (e) => {
+      draggedRow = row;
+      draggedStoreId = row.getAttribute('data-store-id');
+      draggedIdx = parseInt(row.getAttribute('data-idx'));
+      row.classList.add('dragging');
+      if (e.dataTransfer) {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', draggedIdx);
       }
+    });
+
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+      const targetStoreId = row.getAttribute('data-store-id');
+      if (targetStoreId === draggedStoreId && row !== draggedRow) {
+        row.classList.add('drag-over');
+      }
+    });
+
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('drag-over');
+    });
+
+    row.addEventListener('drop', (e) => {
+      e.preventDefault();
+      row.classList.remove('drag-over');
+      const targetStoreId = row.getAttribute('data-store-id');
+      const targetIdx = parseInt(row.getAttribute('data-idx'));
+
+      if (draggedRow && draggedStoreId === targetStoreId && draggedIdx !== null && draggedIdx !== targetIdx) {
+        reorderStoreItems(itemsByStore[draggedStoreId], draggedIdx, targetIdx);
+      }
+    });
+
+    row.addEventListener('dragend', () => {
+      row.classList.remove('dragging');
+      container.querySelectorAll('.shopping-item-row').forEach(r => r.classList.remove('drag-over'));
     });
   });
 
-  shoppingListContainer.querySelectorAll('.move-down-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const storeId = btn.getAttribute('data-store-id');
-      const idx = parseInt(btn.getAttribute('data-idx'));
-      if (itemsByStore[storeId] && idx < itemsByStore[storeId].length - 1) {
-        swapShoppingItemsOrder(itemsByStore[storeId], idx, idx + 1);
+  // Touch Drag & Drop (Mobile Smartphones)
+  let touchDraggedRow = null;
+  let touchDraggedStoreId = null;
+  let touchDraggedIdx = null;
+
+  container.querySelectorAll('.shopping-item-row').forEach(row => {
+    const handle = row.querySelector('.drag-handle');
+    if (!handle) return;
+
+    handle.addEventListener('touchstart', (e) => {
+      touchDraggedRow = row;
+      touchDraggedStoreId = row.getAttribute('data-store-id');
+      touchDraggedIdx = parseInt(row.getAttribute('data-idx'));
+      row.classList.add('dragging');
+    }, { passive: true });
+
+    handle.addEventListener('touchmove', (e) => {
+      if (!touchDraggedRow) return;
+      const touch = e.touches[0];
+      const targetEl = document.elementFromPoint(touch.clientX, touch.clientY);
+      if (!targetEl) return;
+      const targetRow = targetEl.closest('.shopping-item-row');
+
+      container.querySelectorAll('.shopping-item-row').forEach(r => r.classList.remove('drag-over'));
+      if (targetRow && targetRow.getAttribute('data-store-id') === touchDraggedStoreId && targetRow !== touchDraggedRow) {
+        targetRow.classList.add('drag-over');
       }
+    }, { passive: true });
+
+    handle.addEventListener('touchend', (e) => {
+      if (!touchDraggedRow) return;
+      const touch = e.changedTouches[0];
+      const targetEl = document.elementFromPoint(touch.clientX, touch.clientY);
+      touchDraggedRow.classList.remove('dragging');
+      container.querySelectorAll('.shopping-item-row').forEach(r => r.classList.remove('drag-over'));
+
+      if (targetEl) {
+        const targetRow = targetEl.closest('.shopping-item-row');
+        if (targetRow && targetRow.getAttribute('data-store-id') === touchDraggedStoreId) {
+          const targetIdx = parseInt(targetRow.getAttribute('data-idx'));
+          if (touchDraggedIdx !== null && touchDraggedIdx !== targetIdx) {
+            reorderStoreItems(itemsByStore[touchDraggedStoreId], touchDraggedIdx, targetIdx);
+          }
+        }
+      }
+      touchDraggedRow = null;
+      touchDraggedStoreId = null;
+      touchDraggedIdx = null;
     });
   });
+}
+
+function reorderStoreItems(itemsList, fromIdx, toIdx) {
+  if (!itemsList || fromIdx < 0 || toIdx < 0 || fromIdx >= itemsList.length || toIdx >= itemsList.length) return;
+
+  const [movedItem] = itemsList.splice(fromIdx, 1);
+  itemsList.splice(toIdx, 0, movedItem);
+
+  // Update orderIndex for all items in this store
+  itemsList.forEach((item, newOrder) => {
+    item.orderIndex = newOrder;
+    if (item.isExtra) {
+      const target = state.extraShoppingItems.find(i => i.id === item.id);
+      if (target) target.order = newOrder;
+    } else {
+      const dayData = normalizeDayData(state.currentPlan.days[item.dayKey]);
+      const dish = dayData.dishes.find(d => d.id === item.dishId);
+      if (dish && dish.ingredients) {
+        const ing = dish.ingredients.find(i => i.id === item.id);
+        if (ing) ing.order = newOrder;
+      }
+    }
+  });
+
+  state.saveLocal();
+  renderShoppingPage();
 }
 
 function swapShoppingItemsOrder(itemsList, idxA, idxB) {

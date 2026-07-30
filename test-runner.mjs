@@ -65,10 +65,13 @@ server.listen(8080, async () => {
     const addedItemCount = await page.locator('#extra-items-list-container:has-text("トイレットペーパー")').count();
     console.log(`Added Extra Item ("トイレットペーパー") found in container: ${addedItemCount > 0 ? 'YES' : 'NO'}`);
 
-    // TEST 2: Shopping Tab Item Sorting (Unchecked at top, Checked at bottom)
-    console.log('\n--- TESTING SHOPPING TAB ITEM SORTING ---');
+    // TEST 2: Shopping Tab Item Drag Handles & Sorting
+    console.log('\n--- TESTING SHOPPING TAB ITEM DRAG HANDLES & SORTING ---');
     await page.click('[data-tab="shopping"]');
     await page.waitForTimeout(500);
+
+    const dragHandlesCount = await page.locator('#shopping-list-container .drag-handle').count();
+    console.log(`Drag Handle Icons count in shopping list: ${dragHandlesCount}`);
 
     // Click the first checkbox in the shopping list
     const firstCheckbox = page.locator('#shopping-list-container .custom-checkbox').first();

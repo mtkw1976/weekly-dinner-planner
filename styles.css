@@ -529,6 +529,27 @@ body {
   background: #fff9fa;
 }
 
+.shopping-item-row.dragging {
+  opacity: 0.4;
+  background: #fff0f3 !important;
+  border-left: 3px solid #ff4d6d !important;
+}
+
+.shopping-item-row.drag-over {
+  border-top: 3px solid #ff4d6d !important;
+  background: #fff5f7 !important;
+}
+
+.drag-handle {
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .shopping-item-left {
   display: flex;
   align-items: center;
