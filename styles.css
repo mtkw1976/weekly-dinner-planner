@@ -196,13 +196,13 @@ body {
   padding: 16px;
 }
 
-.page {
-  display: none;
+.page, .page-content {
+  display: none !important;
   animation: fadeIn 0.25s ease-in-out forwards;
 }
 
-.page.active {
-  display: block;
+.page.active, .page-content.active {
+  display: block !important;
 }
 
 @keyframes fadeIn {

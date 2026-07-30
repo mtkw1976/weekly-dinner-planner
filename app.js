@@ -441,7 +441,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.2.1',
+      version: '2.2.2',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -586,11 +586,13 @@ function switchTab(tabId) {
     }
   });
 
-  document.querySelectorAll('.page').forEach(p => {
+  document.querySelectorAll('.page, .page-content').forEach(p => {
     if (p.id === `page-${tabId}`) {
       p.classList.add('active');
+      p.style.setProperty('display', 'block', 'important');
     } else {
       p.classList.remove('active');
+      p.style.setProperty('display', 'none', 'important');
     }
   });
 

@@ -47,51 +47,31 @@ server.listen(8080, async () => {
     console.log('--- PAGE UNCAUGHT ERRORS ---');
     pageErrors.forEach(e => console.log(e));
 
-    const plannerCardsCount = await page.locator('.dinner-card').count();
-    console.log(`Planner cards count: ${plannerCardsCount}`);
+    // TEST TAB VISIBILITY SWITCHING
+    console.log('\n--- TESTING TAB PAGE VISIBILITY SWITCHING ---');
 
-    const navButtonsCount = await page.locator('.nav-item').count();
-    console.log(`Nav buttons count: ${navButtonsCount}`);
-
-    // TEST 1: Extra Memo Card on #page-planner ("今週の献立")
-    console.log('\n--- TESTING PLANNER TAB EXTRA MEMO CARD LOCATION ---');
-    const memoHeaderInPlanner = await page.locator('#page-planner h3', { hasText: '日常品・その他買い物メモ（献立以外）' }).count();
-    console.log(`Extra Memo Header Count on #page-planner: ${memoHeaderInPlanner}`);
-
-    // TEST 2: Week Selection & Navigation Controls
-    console.log('\n--- TESTING WEEK SELECTION & NAVIGATION CONTROLS ---');
-    const initialRange = await page.locator('#planner-date-range').innerText();
-    console.log(`Initial Week Date Range: ${initialRange}`);
-
-    // Click "前の週"
-    await page.click('#prev-week-btn');
+    // 1. Click Shopping Tab
+    await page.click('[data-tab="shopping"]');
     await page.waitForTimeout(300);
-    const prevRange = await page.locator('#planner-date-range').innerText();
-    console.log(`After clicking "前の週": ${prevRange}`);
+    const plannerVisibleOnShopping = await page.locator('#page-planner').isVisible();
+    const shoppingVisibleOnShopping = await page.locator('#page-shopping').isVisible();
+    console.log(`Shopping tab active: #page-planner visible=${plannerVisibleOnShopping}, #page-shopping visible=${shoppingVisibleOnShopping}`);
 
-    // Click "次の週"
-    await page.click('#next-week-btn');
+    // 2. Click Settings Tab
+    await page.click('[data-tab="settings"]');
     await page.waitForTimeout(300);
-    const nextRange = await page.locator('#planner-date-range').innerText();
-    console.log(`After clicking "次の週": ${nextRange}`);
+    const plannerVisibleOnSettings = await page.locator('#page-planner').isVisible();
+    const settingsVisibleOnSettings = await page.locator('#page-settings').isVisible();
+    console.log(`Settings tab active: #page-planner visible=${plannerVisibleOnSettings}, #page-settings visible=${settingsVisibleOnSettings}`);
 
-    // Click "今週へ"
-    await page.click('#today-week-btn');
+    // 3. Return to Planner Tab
+    await page.click('[data-tab="planner"]');
     await page.waitForTimeout(300);
-    const todayRange = await page.locator('#planner-date-range').innerText();
-    console.log(`After clicking "今週へ": ${todayRange}`);
+    const plannerVisibleOnPlanner = await page.locator('#page-planner').isVisible();
+    console.log(`Planner tab active: #page-planner visible=${plannerVisibleOnPlanner}`);
 
-    const hasTodayBadge = todayRange.includes('今週');
-    console.log(`Current Week badge displayed: ${hasTodayBadge ? 'YES' : 'NO'}`);
-
-    // TEST 3: Calendar Date Picker Jump
-    console.log('\n--- TESTING CALENDAR DATE PICKER JUMP ---');
-    await page.evaluate(() => {
-      window.state.selectWeekByDate('2026-08-10');
-    });
-    await page.waitForTimeout(300);
-    const pickedRange = await page.locator('#planner-date-range').innerText();
-    console.log(`After picking 2026-08-10: ${pickedRange}`);
+    const isTabSwitchingClean = (!plannerVisibleOnShopping && shoppingVisibleOnShopping && !plannerVisibleOnSettings && settingsVisibleOnSettings && plannerVisibleOnPlanner);
+    console.log(`Tab visibility switching clean and complete: ${isTabSwitchingClean ? 'YES' : 'NO'}`);
 
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log('Screenshot saved to test-screenshot.png');
