@@ -441,7 +441,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.2.3',
+      version: '2.2.4',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -701,7 +701,7 @@ function renderPlannerPage() {
   container.innerHTML = html;
 
   // Attach Event Handlers
-  container.querySelectorAll('.edit-day-btn').forEach(btn => {
+  container.querySelectorAll('.add-dish-btn, .edit-day-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const dayKey = btn.getAttribute('data-day');
       openEditDayModal(dayKey);
@@ -1410,6 +1410,14 @@ function setupEventListeners() {
       renderApp();
       const selectedDayObj = DAYS_OF_WEEK_BASE.find(d => d.key === state.startDayOfWeek);
       showToast(`献立の開始曜日を「${selectedDayObj ? selectedDayObj.label : ''}」に変更しました！`);
+    });
+  }
+
+  // Global Add Dish Header Button
+  const addDishGlobalBtn = document.getElementById('add-dish-global-btn');
+  if (addDishGlobalBtn) {
+    addDishGlobalBtn.addEventListener('click', () => {
+      openEditDayModal('mon');
     });
   }
 
