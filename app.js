@@ -105,34 +105,67 @@ function normalizeDayData(dayData) {
   if (!dayData || typeof dayData !== 'object') {
     return { dishes: [{ id: 'dish_' + Date.now(), title: '', rating: 5, memo: '', ingredients: [] }] };
   }
+
+  let dishes = [];
   if (dayData.dishes && Array.isArray(dayData.dishes) && dayData.dishes.length > 0) {
-    dayData.dishes = dayData.dishes.map((dish, idx) => {
-      if (!dish || typeof dish !== 'object') {
-        return { id: 'dish_' + Date.now() + idx, title: '', rating: 5, memo: '', ingredients: [] };
-      }
-      if (!dish.id) dish.id = 'dish_' + Date.now() + idx;
-      if (!Array.isArray(dish.ingredients)) dish.ingredients = [];
-      return dish;
-    });
-    return dayData;
+    dishes = dayData.dishes;
+  } else {
+    const oldDishTitle = typeof dayData.dish === 'string' ? dayData.dish : '';
+    const oldRating = typeof dayData.rating === 'number' ? dayData.rating : 5;
+    const oldMemo = typeof dayData.memo === 'string' ? dayData.memo : '';
+    let oldIngredients = [];
+    if (Array.isArray(dayData.ingredients)) {
+      oldIngredients = dayData.ingredients;
+    } else if (typeof dayData.ingredients === 'string' && dayData.ingredients.trim() !== '') {
+      oldIngredients = dayData.ingredients.split(',').map((name, idx) => ({
+        id: 'ing_' + Date.now() + idx,
+        name: name.trim(),
+        storeId: 'other',
+        checked: false
+      }));
+    }
+
+    dishes = [{
+      id: 'dish_' + Date.now(),
+      title: oldDishTitle,
+      rating: oldRating,
+      memo: oldMemo,
+      ingredients: oldIngredients
+    }];
   }
 
-  const oldDishTitle = typeof dayData.dish === 'string' ? dayData.dish : '';
-  const oldRating = typeof dayData.rating === 'number' ? dayData.rating : 5;
-  const oldMemo = typeof dayData.memo === 'string' ? dayData.memo : '';
-  const oldIngredients = Array.isArray(dayData.ingredients) ? dayData.ingredients : [];
+  const sanitizedDishes = dishes.map((dish, dIdx) => {
+    if (!dish || typeof dish !== 'object') {
+      return { id: 'dish_' + Date.now() + dIdx, title: '', rating: 5, memo: '', ingredients: [] };
+    }
+    const safeDish = {
+      id: dish.id || ('dish_' + Date.now() + dIdx),
+      title: typeof dish.title === 'string' ? dish.title : '',
+      rating: typeof dish.rating === 'number' ? dish.rating : 5,
+      memo: typeof dish.memo === 'string' ? dish.memo : '',
+      ingredients: []
+    };
 
-  return {
-    dishes: [
-      {
-        id: 'dish_' + Date.now(),
-        title: oldDishTitle,
-        rating: oldRating,
-        memo: oldMemo,
-        ingredients: oldIngredients
-      }
-    ]
-  };
+    if (Array.isArray(dish.ingredients)) {
+      safeDish.ingredients = dish.ingredients.filter(ing => ing && typeof ing === 'object').map((ing, iIdx) => ({
+        id: ing.id || ('ing_' + Date.now() + iIdx),
+        name: typeof ing.name === 'string' ? ing.name : String(ing || ''),
+        storeId: typeof ing.storeId === 'string' ? ing.storeId : 'other',
+        checked: Boolean(ing.checked)
+      }));
+    } else if (typeof dish.ingredients === 'string' && dish.ingredients.trim() !== '') {
+      safeDish.ingredients = dish.ingredients.split(',').map((name, iIdx) => ({
+        id: 'ing_' + Date.now() + iIdx,
+        name: name.trim(),
+        storeId: 'other',
+        checked: false
+      }));
+    }
+
+    return safeDish;
+  });
+
+  return { dishes: sanitizedDishes };
 }
 
 function getSortedStoresByUsage() {
@@ -301,7 +334,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.3',
+      version: '2.0.4',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -495,13 +528,14 @@ function renderPlannerPage() {
             ${dish.memo ? `<div class="menu-memo" style="margin-top:4px;">${escapeHtml(dish.memo)}</div>` : ''}
 
             <div class="ingredients-list" style="margin-top:8px;">
-              ${dish.ingredients && dish.ingredients.length > 0 ? 
+              ${Array.isArray(dish.ingredients) && dish.ingredients.length > 0 ? 
                 dish.ingredients.map(ing => {
-                  const store = state.stores.find(s => s.id === ing.storeId) || { name: '未定', cssClass: 'tag-other', color: '#64748b' };
+                  const storeId = (ing && ing.storeId) ? ing.storeId : 'other';
+                  const store = (state.stores || []).find(s => s.id === storeId) || { name: '未定', cssClass: 'tag-other', color: '#64748b' };
                   return `
                     <div class="ingredient-chip">
-                      <span>${escapeHtml(ing.name)}</span>
-                      <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name)}</span>
+                      <span>${escapeHtml((ing && ing.name) ? ing.name : '')}</span>
+                      <span class="store-tag ${store.cssClass || 'tag-other'}" style="${store.color ? `background-color: ${store.color};` : ''}">${escapeHtml(store.name || '')}</span>
                     </div>
                   `;
                 }).join('')
