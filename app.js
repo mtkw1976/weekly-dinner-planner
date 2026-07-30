@@ -334,7 +334,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.6',
+      version: '2.0.7',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -499,6 +499,8 @@ function renderPlannerPage() {
   const container = document.getElementById('planner-cards-container');
   const dateRangeEl = document.getElementById('planner-date-range');
   if (!container || !dateRangeEl) return;
+
+  renderExtraShoppingItems();
 
   if (!state.currentPlan || !state.currentPlan.days) {
     state.currentPlan = DEFAULT_WEEKLY_PLAN;

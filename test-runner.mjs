@@ -53,15 +53,12 @@ server.listen(8080, async () => {
     const navButtonsCount = await page.locator('.nav-item').count();
     console.log(`Nav buttons count: ${navButtonsCount}`);
 
-    // TEST: Shopping tab and Non-menu Extra Shopping Memo Card
-    console.log('\n--- TESTING SHOPPING TAB & EXTRA ITEMS CARD ---');
-    await page.click('[data-tab="shopping"]');
-    await page.waitForTimeout(500);
+    // TEST: Verify Extra Memo Card on #page-planner ("今週の献立")
+    console.log('\n--- TESTING PLANNER TAB EXTRA MEMO CARD LOCATION ---');
+    const memoHeaderInPlanner = await page.locator('#page-planner h3', { hasText: '日常品・その他買い物メモ（献立以外）' }).count();
+    console.log(`Extra Memo Header Count on #page-planner: ${memoHeaderInPlanner}`);
 
-    const memoHeaderCount = await page.locator('text=日常品・その他買い物メモ（献立以外）').count();
-    console.log(`Extra Memo Header Count: ${memoHeaderCount}`);
-
-    // Fill form and add an extra item
+    // Fill form and add an extra item on #page-planner
     await page.fill('#extra-item-name-input', 'トイレットペーパー');
     await page.click('#add-extra-item-form button[type="submit"]');
     await page.waitForTimeout(500);
