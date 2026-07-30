@@ -334,7 +334,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.5',
+      version: '2.0.6',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
@@ -1141,15 +1141,65 @@ function setupEventListeners() {
   const clearCheckedBtn = document.getElementById('clear-checked-items-btn');
   if (clearCheckedBtn) {
     clearCheckedBtn.addEventListener('click', () => {
-      DAYS_OF_WEEK.forEach(d => {
-        const dayData = state.currentPlan.days[d.key];
-        if (dayData && dayData.ingredients) {
-          dayData.ingredients = dayData.ingredients.filter(i => !i.checked);
+      const daysKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+      daysKeys.forEach(k => {
+        const dayData = normalizeDayData(state.currentPlan.days[k]);
+        if (dayData && dayData.dishes) {
+          dayData.dishes.forEach(dish => {
+            if (Array.isArray(dish.ingredients)) {
+              dish.ingredients = dish.ingredients.filter(i => !i.checked);
+            }
+          });
+          state.currentPlan.days[k] = dayData;
         }
       });
       state.saveLocal();
       renderShoppingPage();
       showToast('チェック済みの食材を整理しました！');
+    });
+  }
+
+  // Non-menu Extra Shopping Item Form Handler
+  const addExtraItemForm = document.getElementById('add-extra-item-form');
+  if (addExtraItemForm) {
+    addExtraItemForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const nameInput = document.getElementById('extra-item-name-input');
+      const storeSelect = document.getElementById('extra-item-store-select');
+      const name = nameInput ? nameInput.value.trim() : '';
+      const storeId = storeSelect ? storeSelect.value || 'other' : 'other';
+
+      if (!name) return;
+
+      if (!Array.isArray(state.extraShoppingItems)) {
+        state.extraShoppingItems = [];
+      }
+
+      state.extraShoppingItems.push({
+        id: 'extra_' + Date.now(),
+        name: name,
+        storeId: storeId,
+        checked: false,
+        order: state.extraShoppingItems.length
+      });
+
+      state.saveLocal();
+      if (nameInput) nameInput.value = '';
+      renderShoppingPage();
+      showToast(`日常品メモ「${name}」を追加しました！`);
+    });
+  }
+
+  // Clear all non-menu extra shopping items
+  const clearExtraItemsBtn = document.getElementById('clear-extra-items-btn');
+  if (clearExtraItemsBtn) {
+    clearExtraItemsBtn.addEventListener('click', () => {
+      if (confirm('日常品・その他の買い物メモを一括全削除しますか？')) {
+        state.extraShoppingItems = [];
+        state.saveLocal();
+        renderShoppingPage();
+        showToast('日常品メモを一括削除しました');
+      }
     });
   }
 
