@@ -72,18 +72,55 @@ function getOrderedDaysOfWeek() {
   ];
 }
 
+function sanitizeWeeklyPlan(plan) {
+  let validPlan = plan;
+  if (!validPlan || typeof validPlan !== 'object') {
+    validPlan = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN));
+  }
+  if (!validPlan.startDate) {
+    validPlan.startDate = getWeekStartDate(new Date(), (state && state.startDayOfWeek) ? state.startDayOfWeek : 'mon').toISOString().split('T')[0];
+  }
+  if (!validPlan.days || typeof validPlan.days !== 'object') {
+    validPlan.days = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN.days));
+  }
+
+  const requiredKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  requiredKeys.forEach(key => {
+    if (!validPlan.days[key]) {
+      validPlan.days[key] = {
+        dishes: [{
+          id: 'dish_' + Date.now() + Math.random().toString(36).substr(2, 4),
+          title: '',
+          rating: 5,
+          memo: '',
+          ingredients: []
+        }]
+      };
+    }
+  });
+  return validPlan;
+}
+
 function normalizeDayData(dayData) {
-  if (!dayData) {
+  if (!dayData || typeof dayData !== 'object') {
     return { dishes: [{ id: 'dish_' + Date.now(), title: '', rating: 5, memo: '', ingredients: [] }] };
   }
   if (dayData.dishes && Array.isArray(dayData.dishes) && dayData.dishes.length > 0) {
+    dayData.dishes = dayData.dishes.map((dish, idx) => {
+      if (!dish || typeof dish !== 'object') {
+        return { id: 'dish_' + Date.now() + idx, title: '', rating: 5, memo: '', ingredients: [] };
+      }
+      if (!dish.id) dish.id = 'dish_' + Date.now() + idx;
+      if (!Array.isArray(dish.ingredients)) dish.ingredients = [];
+      return dish;
+    });
     return dayData;
   }
 
-  const oldDishTitle = dayData.dish || '';
-  const oldRating = dayData.rating || 5;
-  const oldMemo = dayData.memo || '';
-  const oldIngredients = dayData.ingredients || [];
+  const oldDishTitle = typeof dayData.dish === 'string' ? dayData.dish : '';
+  const oldRating = typeof dayData.rating === 'number' ? dayData.rating : 5;
+  const oldMemo = typeof dayData.memo === 'string' ? dayData.memo : '';
+  const oldIngredients = Array.isArray(dayData.ingredients) ? dayData.ingredients : [];
 
   return {
     dishes: [
@@ -219,18 +256,16 @@ const DEFAULT_WEEKLY_PLAN = {
 // App State Management
 class AppState {
   constructor() {
-    this.stores = JSON.parse(localStorage.getItem('stores')) || DEFAULT_STORES;
-    this.currentPlan = JSON.parse(localStorage.getItem('current_plan')) || DEFAULT_WEEKLY_PLAN;
-    this.history = JSON.parse(localStorage.getItem('history_plans')) || [
-      {
-        id: 'hist_sample_1',
-        savedAt: '2026-07-19T18:00:00.000Z',
-        startDate: '2026-07-13',
-        title: '7月第3週のスタミナ献立',
-        plan: JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN))
-      }
-    ];
-    this.extraShoppingItems = JSON.parse(localStorage.getItem('extra_shopping_items')) || [];
+    this.stores = (Array.isArray(JSON.parse(localStorage.getItem('stores'))) && JSON.parse(localStorage.getItem('stores')).length > 0)
+      ? JSON.parse(localStorage.getItem('stores'))
+      : DEFAULT_STORES;
+    this.currentPlan = sanitizeWeeklyPlan(JSON.parse(localStorage.getItem('current_plan')));
+    this.history = Array.isArray(JSON.parse(localStorage.getItem('history_plans')))
+      ? JSON.parse(localStorage.getItem('history_plans'))
+      : [];
+    this.extraShoppingItems = Array.isArray(JSON.parse(localStorage.getItem('extra_shopping_items')))
+      ? JSON.parse(localStorage.getItem('extra_shopping_items'))
+      : [];
     this.startDayOfWeek = localStorage.getItem('week_start_day') || 'mon';
     this.activeTab = 'planner'; // planner, shopping, history, settings
     this.shoppingFilterStore = 'all';
@@ -266,7 +301,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.1',
+      version: '2.0.2',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
