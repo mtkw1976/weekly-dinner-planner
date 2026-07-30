@@ -47,31 +47,23 @@ server.listen(8080, async () => {
     console.log('--- PAGE UNCAUGHT ERRORS ---');
     pageErrors.forEach(e => console.log(e));
 
-    // TEST TAB VISIBILITY SWITCHING
-    console.log('\n--- TESTING TAB PAGE VISIBILITY SWITCHING ---');
+    // TEST GOOGLE DRIVE SYNC STATUS BADGE UI UPDATES
+    console.log('\n--- TESTING GOOGLE DRIVE SYNC STATUS BADGE UI UPDATES ---');
 
-    // 1. Click Shopping Tab
-    await page.click('[data-tab="shopping"]');
-    await page.waitForTimeout(300);
-    const plannerVisibleOnShopping = await page.locator('#page-planner').isVisible();
-    const shoppingVisibleOnShopping = await page.locator('#page-shopping').isVisible();
-    console.log(`Shopping tab active: #page-planner visible=${plannerVisibleOnShopping}, #page-shopping visible=${shoppingVisibleOnShopping}`);
+    // Test 1: Syncing status
+    await page.evaluate(() => window.updateSyncStatusUI('syncing', 'Drive同期中...'));
+    await page.waitForTimeout(200);
+    const syncingText = await page.locator('#sync-status-text').innerText();
+    console.log(`Syncing status text: ${syncingText}`);
 
-    // 2. Click Settings Tab
-    await page.click('[data-tab="settings"]');
-    await page.waitForTimeout(300);
-    const plannerVisibleOnSettings = await page.locator('#page-planner').isVisible();
-    const settingsVisibleOnSettings = await page.locator('#page-settings').isVisible();
-    console.log(`Settings tab active: #page-planner visible=${plannerVisibleOnSettings}, #page-settings visible=${settingsVisibleOnSettings}`);
+    // Test 2: Synced status
+    await page.evaluate(() => window.updateSyncStatusUI('synced', 'Drive同期済み'));
+    await page.waitForTimeout(200);
+    const syncedText = await page.locator('#sync-status-text').innerText();
+    console.log(`Synced status text: ${syncedText}`);
 
-    // 3. Return to Planner Tab
-    await page.click('[data-tab="planner"]');
-    await page.waitForTimeout(300);
-    const plannerVisibleOnPlanner = await page.locator('#page-planner').isVisible();
-    console.log(`Planner tab active: #page-planner visible=${plannerVisibleOnPlanner}`);
-
-    const isTabSwitchingClean = (!plannerVisibleOnShopping && shoppingVisibleOnShopping && !plannerVisibleOnSettings && settingsVisibleOnSettings && plannerVisibleOnPlanner);
-    console.log(`Tab visibility switching clean and complete: ${isTabSwitchingClean ? 'YES' : 'NO'}`);
+    const isSyncBadgeWorking = (syncingText === 'Drive同期中...' && syncedText === 'Drive同期済み');
+    console.log(`Google Drive sync status badge UI updating properly: ${isSyncBadgeWorking ? 'YES' : 'NO'}`);
 
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log('Screenshot saved to test-screenshot.png');

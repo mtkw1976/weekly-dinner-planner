@@ -441,7 +441,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.2.2',
+      version: '2.2.3',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -563,6 +563,7 @@ function updateSyncStatusUI(status, msg) {
     badge.style.color = 'var(--text-muted)';
   }
 }
+window.updateSyncStatusUI = updateSyncStatusUI;
 
 // Navigation Logic
 function setupNavigation() {
