@@ -204,7 +204,7 @@ function getSortedStoresByUsage() {
 // Default Initial Sample Data
 const DEFAULT_WEEKLY_PLAN = {
   id: 'current',
-  startDate: getMonday(new Date()).toISOString().split('T')[0],
+  startDate: getWeekStartDate(new Date()).toISOString().split('T')[0],
   days: {
     mon: {
       dish: '特製ハンバーグ & ガルニ',
@@ -334,7 +334,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.0.4',
+      version: '2.0.5',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       stores: this.stores,
