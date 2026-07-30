@@ -36,8 +36,23 @@ const DAY_KEY_TO_JS_DAY = {
   sat: 6
 };
 
+function formatDateToISO(d) {
+  if (!(d instanceof Date) || isNaN(d)) return new Date().toISOString().split('T')[0];
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseISODate(isoStr) {
+  if (!isoStr || typeof isoStr !== 'string') return new Date();
+  const parts = isoStr.split('-').map(Number);
+  if (parts.length < 3 || isNaN(parts[0])) return new Date();
+  return new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
+}
+
 function getWeekStartDate(baseDate = new Date(), startDayKey = 'mon') {
-  const date = new Date(baseDate);
+  const date = (typeof baseDate === 'string') ? parseISODate(baseDate) : new Date(baseDate);
   date.setHours(0, 0, 0, 0);
   const currentDayNum = date.getDay();
   const targetStartNum = DAY_KEY_TO_JS_DAY[startDayKey] !== undefined ? DAY_KEY_TO_JS_DAY[startDayKey] : 1;
@@ -371,28 +386,29 @@ class AppState {
   }
 
   changeSelectedWeek(deltaDays) {
-    const current = new Date(this.selectedWeekStartDate + 'T00:00:00');
+    const current = parseISODate(this.selectedWeekStartDate);
     current.setDate(current.getDate() + deltaDays);
-    const newStart = getWeekStartDate(current, this.startDayOfWeek).toISOString().split('T')[0];
-    this.selectedWeekStartDate = newStart;
-    this.ensureWeekPlan(newStart);
+    const newStart = getWeekStartDate(current, this.startDayOfWeek);
+    this.selectedWeekStartDate = formatDateToISO(newStart);
+    this.ensureWeekPlan(this.selectedWeekStartDate);
     this.saveLocal();
     renderApp();
   }
 
   selectWeekByDate(targetDateStr) {
     if (!targetDateStr) return;
-    const newStart = getWeekStartDate(new Date(targetDateStr + 'T00:00:00'), this.startDayOfWeek).toISOString().split('T')[0];
-    this.selectedWeekStartDate = newStart;
-    this.ensureWeekPlan(newStart);
+    const targetDate = parseISODate(targetDateStr);
+    const newStart = getWeekStartDate(targetDate, this.startDayOfWeek);
+    this.selectedWeekStartDate = formatDateToISO(newStart);
+    this.ensureWeekPlan(this.selectedWeekStartDate);
     this.saveLocal();
     renderApp();
   }
 
   jumpToCurrentWeek() {
-    const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek).toISOString().split('T')[0];
-    this.selectedWeekStartDate = todayWeekStart;
-    this.ensureWeekPlan(todayWeekStart);
+    const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek);
+    this.selectedWeekStartDate = formatDateToISO(todayWeekStart);
+    this.ensureWeekPlan(this.selectedWeekStartDate);
     this.saveLocal();
     renderApp();
   }
@@ -425,7 +441,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.2.0',
+      version: '2.2.1',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -601,11 +617,11 @@ function renderPlannerPage() {
 
   renderExtraShoppingItems();
 
-  const weekStartDate = new Date(state.selectedWeekStartDate + 'T00:00:00');
+  const weekStartDate = parseISODate(state.selectedWeekStartDate);
   const weekEndDate = new Date(weekStartDate);
   weekEndDate.setDate(weekEndDate.getDate() + 6);
 
-  const todayWeekStart = getWeekStartDate(new Date(), state.startDayOfWeek).toISOString().split('T')[0];
+  const todayWeekStart = formatDateToISO(getWeekStartDate(new Date(), state.startDayOfWeek));
   const isCurrentWeek = (state.selectedWeekStartDate === todayWeekStart);
 
   const days = getOrderedDaysOfWeek();
@@ -1332,22 +1348,53 @@ function setupEventListeners() {
   // Week navigation button handlers
   const prevWeekBtn = document.getElementById('prev-week-btn');
   if (prevWeekBtn) {
-    prevWeekBtn.addEventListener('click', () => state.changeSelectedWeek(-7));
+    prevWeekBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      state.changeSelectedWeek(-7);
+    });
   }
 
   const nextWeekBtn = document.getElementById('next-week-btn');
   if (nextWeekBtn) {
-    nextWeekBtn.addEventListener('click', () => state.changeSelectedWeek(7));
+    nextWeekBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      state.changeSelectedWeek(7);
+    });
   }
 
   const todayWeekBtn = document.getElementById('today-week-btn');
   if (todayWeekBtn) {
-    todayWeekBtn.addEventListener('click', () => state.jumpToCurrentWeek());
+    todayWeekBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      state.jumpToCurrentWeek();
+    });
   }
 
+  const dateNavEl = document.querySelector('.date-navigator');
   const weekDatePicker = document.getElementById('week-date-picker');
-  if (weekDatePicker) {
-    weekDatePicker.addEventListener('change', (e) => state.selectWeekByDate(e.target.value));
+
+  if (dateNavEl && weekDatePicker) {
+    dateNavEl.addEventListener('click', (e) => {
+      if (e.target !== weekDatePicker) {
+        if (typeof weekDatePicker.showPicker === 'function') {
+          try { weekDatePicker.showPicker(); } catch (err) { weekDatePicker.click(); }
+        } else {
+          weekDatePicker.click();
+        }
+      }
+    });
+
+    weekDatePicker.addEventListener('change', (e) => {
+      if (e.target.value) {
+        state.selectWeekByDate(e.target.value);
+      }
+    });
+
+    weekDatePicker.addEventListener('input', (e) => {
+      if (e.target.value) {
+        state.selectWeekByDate(e.target.value);
+      }
+    });
   }
 
   // Start day of week setting handler
