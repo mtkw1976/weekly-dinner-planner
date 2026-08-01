@@ -223,8 +223,8 @@ server.listen(8080, async () => {
     assertTest('Preserve Local Entered Menu Data Rule', currentMonTitle.length > 0, `Mon Title = ${currentMonTitle}`);
 
 
-    // SECTION 9: MULTI-DAY SUPPORT & FLEXIBLE WEEK START SUITE
-    console.log('\n--- 9. MULTI-DAY SUPPORT & FLEXIBLE WEEK START SUITE ---');
+    // SECTION 9: MULTI-DAY & MONDAY MULTI-MENU/INGREDIENT SUPPORT SUITE
+    console.log('\n--- 9. MULTI-DAY & MONDAY MULTI-MENU/INGREDIENT SUPPORT SUITE ---');
 
     // Test 9.1: Multi-Day Plan Storage & Access across all 7 Days
     const daysArray = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
@@ -233,15 +233,18 @@ server.listen(8080, async () => {
     }, daysArray);
     assertTest('All 7 Days (Mon-Sun) Multi-Day Data Plan Support', allDaysSupported, `Days supported = ${daysArray.join(', ')}`);
 
-    // Test 9.2: Multi-Dish Support per Single Day & Multi-Day Recipe Setup
+    // Test 9.2: Monday Multi-Menu & Multi-Ingredient Explicit Verification (3 Dishes on Monday)
     await page.evaluate(() => {
       window.state.currentPlan.days['mon'] = {
-        dishes: [{ id: 'dish_mon_1', title: '主菜: 特製カレー', rating: 5, ingredients: [{ id: 'ing_m1', name: 'カレールー', storeId: 'aeon' }] }]
+        dishes: [
+          { id: 'm_dish_1', title: '主菜: 和風ハンバーグ', rating: 5, ingredients: [{ id: 'm_ing_1', name: '合い挽き肉', storeId: 'butcher' }, { id: 'm_ing_2', name: '大根', storeId: 'greengrocer' }] },
+          { id: 'm_dish_2', title: '副菜: カボチャの煮物', rating: 4, ingredients: [{ id: 'm_ing_3', name: 'カボチャ 1/4個', storeId: 'greengrocer' }] },
+          { id: 'm_dish_3', title: '汁物: 豆腐とおふの味噌汁', rating: 5, ingredients: [{ id: 'm_ing_4', name: '木綿豆腐 1丁', storeId: 'life' }] }
+        ]
       };
       window.state.currentPlan.days['wed'] = {
         dishes: [
-          { id: 'dish_wed_1', title: '主菜: ハンバーグ', rating: 5, ingredients: [{ id: 'ing_w1', name: '合い挽き肉', storeId: 'butcher' }] },
-          { id: 'dish_wed_2', title: '副菜: ポテトサラダ', rating: 4, ingredients: [{ id: 'ing_w2', name: 'じゃがいも', storeId: 'greengrocer' }] }
+          { id: 'dish_wed_1', title: '主菜: 海鮮パエリア', rating: 5, ingredients: [{ id: 'ing_w1', name: 'シーフードミックス', storeId: 'gyomu' }] }
         ]
       };
       window.state.saveLocal();
@@ -249,8 +252,8 @@ server.listen(8080, async () => {
     });
     await page.waitForTimeout(300);
 
-    const wedDishesCount = await page.locator('.dinner-card[data-day="wed"] .planner-dish-item').count();
-    assertTest('Multi-Dish Support per Single Day (Wednesday 2 Dishes)', wedDishesCount === 2, `Wed Dishes Count = ${wedDishesCount}`);
+    const monDishesCount = await page.locator('.dinner-card[data-day="mon"] .planner-dish-item').count();
+    assertTest('Monday Multi-Menu & Multi-Ingredient Support (3 Dishes on Monday)', monDishesCount === 3, `Monday Dishes Count = ${monDishesCount}`);
 
     // Test 9.3: Ingredient Aggregation across Multiple Days on Shopping List
     await page.click('[data-tab="shopping"]');
