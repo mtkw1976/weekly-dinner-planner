@@ -460,7 +460,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.4.0',
+      version: '2.4.1',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -1483,25 +1483,31 @@ function setupEventListeners() {
   }
 
   // Save current plan to history
+  const handleSaveToHistory = () => {
+    if (!state.currentPlan) return;
+    const defaultTitle = `${formatDateRange(state.selectedWeekStartDate)}の献立`;
+    const titlePrompt = prompt('保存する履歴のタイトルを入力してください:', defaultTitle);
+    if (titlePrompt) {
+      const newHist = {
+        id: 'hist_' + Date.now() + Math.random().toString(36).substr(2, 4),
+        savedAt: new Date().toISOString(),
+        startDate: state.selectedWeekStartDate,
+        title: titlePrompt,
+        plan: JSON.parse(JSON.stringify(state.currentPlan))
+      };
+      if (!Array.isArray(state.history)) state.history = [];
+      state.history.unshift(newHist);
+      state.saveLocal();
+      showToast('Google Drive・ローカル履歴にアーカイブ保存しました！');
+      switchTab('history');
+    }
+  };
+
   const archiveCurrentBtn = document.getElementById('archive-current-plan-btn');
-  if (archiveCurrentBtn) {
-    archiveCurrentBtn.addEventListener('click', () => {
-      const titlePrompt = prompt('保存する履歴のタイトルを入力してください:', `${formatDateRange(state.currentPlan.startDate)}の献立`);
-      if (titlePrompt) {
-        const newHist = {
-          id: 'hist_' + Date.now(),
-          savedAt: new Date().toISOString(),
-          startDate: state.currentPlan.startDate,
-          title: titlePrompt,
-          plan: JSON.parse(JSON.stringify(state.currentPlan))
-        };
-        state.history.unshift(newHist);
-        state.saveLocal();
-        showToast('Google Drive・ローカル履歴にアーカイブ保存しました！');
-        switchTab('history');
-      }
-    });
-  }
+  if (archiveCurrentBtn) archiveCurrentBtn.addEventListener('click', handleSaveToHistory);
+
+  const archiveCurrentHistBtn = document.getElementById('archive-current-plan-hist-btn');
+  if (archiveCurrentHistBtn) archiveCurrentHistBtn.addEventListener('click', handleSaveToHistory);
 
   // Clear checked shopping list items
   const clearCheckedBtn = document.getElementById('clear-checked-items-btn');

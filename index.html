@@ -37,7 +37,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <span class="brand-title">献立＆買い物ノート ✨</span>
-          <span class="version-badge">v2.4.0</span>
+          <span class="version-badge">v2.4.1</span>
         </div>
       </div>
       <div class="header-actions">
@@ -74,6 +74,10 @@
             <button id="add-dish-global-btn" class="btn btn-primary btn-sm">
               <i data-lucide="plus" style="width:14px;height:14px;"></i>
               献立を追加
+            </button>
+            <button id="archive-current-plan-btn" class="btn btn-indigo btn-sm" style="font-weight:700;">
+              <i data-lucide="bookmark-plus" style="width:14px;height:14px;"></i>
+              履歴に保存
             </button>
             <button id="clear-all-plan-btn" class="btn btn-secondary btn-sm" style="color:#f43f5e;border-color:rgba(244,63,94,0.3);">
               <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
@@ -164,6 +168,10 @@
             <i data-lucide="history" style="color:var(--accent-indigo);"></i>
             献立の過去履歴アーカイブ
           </div>
+          <button id="archive-current-plan-hist-btn" class="btn btn-indigo btn-sm" style="font-weight:700;">
+            <i data-lucide="bookmark-plus" style="width:14px;height:14px;"></i>
+            今週の献立を履歴に保存
+          </button>
         </div>
         <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
           奥さんが考えてくれた過去の献立記録です。いつでもGoogle Drive経由でAndroid・iPhone両方から参照・復元できます。

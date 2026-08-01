@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.4.0', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.4.1', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -182,21 +182,33 @@ server.listen(8080, async () => {
     await page.waitForTimeout(150);
 
 
-    // SECTION 8: NEW FEATURE VERIFICATION SUITE
-    console.log('\n--- 8. NEW FEATURE VERIFICATION SUITE ---');
+    // SECTION 8: NEW FEATURE & RESTORED BUTTON VERIFICATION SUITE
+    console.log('\n--- 8. NEW FEATURE & RESTORED BUTTON VERIFICATION SUITE ---');
     
     // Test 8.1: Unsynced Warning Banner
     const isWarningVisible = await page.locator('#drive-unsynced-warning').isVisible();
     assertTest('Unsynced Drive Warning Banner Visible on Startup', isWarningVisible);
 
-    // Test 8.2: Date Format Helper
+    // Test 8.2: Save to History Buttons Presence
+    const isPlannerHistoryBtnVisible = await page.locator('#archive-current-plan-btn').isVisible();
+    assertTest('Save to History Button on Planner Page (#archive-current-plan-btn)', isPlannerHistoryBtnVisible);
+
+    await page.click('[data-tab="history"]');
+    await page.waitForTimeout(200);
+    const isHistoryTabBtnVisible = await page.locator('#archive-current-plan-hist-btn').isVisible();
+    assertTest('Save to History Button on History Page (#archive-current-plan-hist-btn)', isHistoryTabBtnVisible);
+
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+
+    // Test 8.3: Date Format Helper
     const formatStandardName = await page.evaluate(() => window.formatBackupDisplayName('WeeklyDinner_Backup_20260801_224207.json'));
     assertTest('Backup Filename Format Parser (Standard)', formatStandardName.includes('2026年8月1日 22時42分07秒のデータ'), `Result = ${formatStandardName}`);
 
     const formatCustomName = await page.evaluate(() => window.formatBackupDisplayName('my_custom_backup.json'));
     assertTest('Backup Filename Format Parser (Custom)', formatCustomName === 'my_custom_backup.json', `Result = ${formatCustomName}`);
 
-    // Test 8.3: Direct File Export Unique Filename & Display
+    // Test 8.4: Direct File Export Unique Filename & Display
     await page.click('[data-tab="settings"]');
     await page.waitForTimeout(200);
     await page.click('#export-json-btn');
@@ -204,7 +216,7 @@ server.listen(8080, async () => {
     const exportText = await page.locator('#export-filename-text').innerText();
     assertTest('Export Filename Display Box', exportText.includes('WeeklyDinner_Backup_'), `Text = ${exportText}`);
 
-    // Test 8.4: Copy Day Menu
+    // Test 8.5: Copy Day Menu
     await page.click('[data-tab="planner"]');
     await page.waitForTimeout(200);
     const initialMonDish = await page.locator('.dinner-card[data-day="mon"] .menu-title').first().innerText();
