@@ -341,12 +341,31 @@ class AppState {
     this.extraShoppingItems = Array.isArray(JSON.parse(localStorage.getItem('extra_shopping_items')))
       ? JSON.parse(localStorage.getItem('extra_shopping_items'))
       : [];
+    this.backupHistory = Array.isArray(JSON.parse(localStorage.getItem('backup_files_history')))
+      ? JSON.parse(localStorage.getItem('backup_files_history'))
+      : [];
     this.activeTab = 'planner'; // planner, shopping, history, settings
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
+    this.editingSourceDayKey = null;
     this.editingDayData = null;
     this.debugMode = localStorage.getItem('gdrive_debug_mode') === 'true';
     this.lastDebugData = null;
+  }
+
+  saveBackupHistory(filename, data) {
+    if (!filename || !data) return;
+    if (!Array.isArray(this.backupHistory)) this.backupHistory = [];
+    if (this.backupHistory.length > 0 && this.backupHistory[0].filename === filename) return;
+    this.backupHistory.unshift({
+      filename: filename,
+      timestamp: Date.now(),
+      data: data
+    });
+    if (this.backupHistory.length > 30) this.backupHistory.pop();
+    try {
+      localStorage.setItem('backup_files_history', JSON.stringify(this.backupHistory));
+    } catch (e) {}
   }
 
   get currentPlan() {
@@ -441,7 +460,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.2.4',
+      version: '2.3.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -480,6 +499,18 @@ class AppState {
 const state = new AppState();
 window.state = state;
 
+export function formatBackupDisplayName(filename) {
+  if (!filename || typeof filename !== 'string') return 'バックアップデータ';
+  const regex = /^WeeklyDinner_Backup_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})\.json$/i;
+  const match = filename.trim().match(regex);
+  if (match) {
+    const [_, year, month, day, hour, min, sec] = match;
+    return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日 ${hour}時${min}分${sec}秒のデータ`;
+  }
+  return filename;
+}
+window.formatBackupDisplayName = formatBackupDisplayName;
+
 // Initialize App & Event Listeners
 async function initApp() {
   renderApp();
@@ -487,26 +518,19 @@ async function initApp() {
   setupEventListeners();
   initIcons();
 
+  const warningBanner = document.getElementById('drive-unsynced-warning');
+  const warningGoBtn = document.getElementById('warning-go-settings-btn');
+  if (warningGoBtn) {
+    warningGoBtn.addEventListener('click', () => switchTab('settings'));
+  }
+
   if (driveSync.accessToken) {
-    updateSyncStatusUI('syncing', 'Drive同期中...');
-    try {
-      const driveData = await driveSync.loadFromDrive();
-      if (driveData && (driveData.currentPlan || driveData.stores || driveData.history)) {
-        state.importAllData(driveData, true);
-        renderApp();
-        updateSyncStatusUI('synced', 'Drive同期済み');
-        showToast('Google Driveから最新の献立・店舗タグデータを自動読み込みしました！');
-      }
-    } catch (err) {
-      console.log('Auto Drive refresh sync info:', err.message);
-      if (err.message && err.message.includes('認証期限')) {
-        updateSyncStatusUI('expired', 'Drive要再認証');
-      } else {
-        updateSyncStatusUI('offline', 'ローカル保存');
-      }
-    }
+    updateSyncStatusUI('synced', 'Drive同期済み');
+    if (warningBanner) warningBanner.style.display = 'none';
   } else {
     updateSyncStatusUI('offline', 'ローカル保存');
+    if (warningBanner) warningBanner.style.display = 'flex';
+    showToast('⚠️ Google Driveと同期されていません。「クラウド設定」からログインしてください。');
   }
 }
 
@@ -688,9 +712,14 @@ function renderPlannerPage() {
             <i data-lucide="calendar" style="width:14px;height:14px;"></i>
             ${dayInfo.label} (${dateFormatted}) ${isToday ? '(本日)' : ''}
           </span>
-          <button type="button" class="btn btn-secondary btn-sm add-dish-btn" data-day="${dayInfo.key}" style="font-size:0.78rem;padding:4px 8px;">
-            <i data-lucide="plus" style="width:12px;height:12px;"></i> メニュー編集・追加
-          </button>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <button type="button" class="btn btn-secondary btn-sm copy-day-btn" data-day="${dayInfo.key}" title="他の曜日にメニューをコピー" style="font-size:0.75rem;padding:4px 8px;color:var(--accent-indigo);border-color:rgba(99,102,241,0.3);">
+              <i data-lucide="copy" style="width:12px;height:12px;"></i> コピー
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm add-dish-btn" data-day="${dayInfo.key}" style="font-size:0.78rem;padding:4px 8px;">
+              <i data-lucide="plus" style="width:12px;height:12px;"></i> メニュー編集・追加
+            </button>
+          </div>
         </div>
 
         ${dishesHtml}
@@ -705,6 +734,13 @@ function renderPlannerPage() {
     btn.addEventListener('click', () => {
       const dayKey = btn.getAttribute('data-day');
       openEditDayModal(dayKey);
+    });
+  });
+
+  container.querySelectorAll('.copy-day-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const dayKey = btn.getAttribute('data-day');
+      openCopyDayModal(dayKey);
     });
   });
 
@@ -1587,32 +1623,21 @@ function setupEventListeners() {
       driveSync.setClientId(clientId);
       driveSync.initGoogleAuth(
         async () => {
-          showToast('Google認証が完了しました！クラウドデータを同期します...');
+          showToast('Google認証が完了しました！現在入力済みのデータをクラウドへ保存します...');
           try {
-            updateSyncStatusUI('syncing', 'Drive同期中...');
+            updateSyncStatusUI('syncing', 'Drive保存中...');
             
-            // Try loading from Drive first to avoid overwriting Drive data with local defaults!
-            let loaded = false;
-            try {
-              const driveData = await driveSync.loadFromDrive();
-              if (driveData && (driveData.currentPlan || driveData.stores || driveData.history)) {
-                state.importAllData(driveData, true);
-                loaded = true;
-              }
-            } catch (loadErr) {
-              console.log('No existing Drive data or empty, saving local state instead:', loadErr.message);
-            }
-
-            if (!loaded) {
-              await driveSync.saveToDrive(state.exportAllData());
-            }
+            // Strictly save current local entered state to Google Drive to protect user data from deletion
+            await driveSync.saveToDrive(state.exportAllData());
 
             updateSyncStatusUI('synced', 'Drive同期済み');
+            const warningBanner = document.getElementById('drive-unsynced-warning');
+            if (warningBanner) warningBanner.style.display = 'none';
             renderApp();
-            showToast(loaded ? 'Google Driveからクラウドデータを読み込み同期しました！' : 'Google Driveに初期データを同期保存しました！');
+            showToast('現在入力済みの献立データをGoogle Driveへ正常に同期・保存しました！');
           } catch (err) {
             updateSyncStatusUI('offline', 'ローカル保存');
-            alert(err.message);
+            alert('Google Driveへの保存に失敗しました: ' + err.message);
           }
         },
         (err) => alert('Google認証エラー: ' + err)
@@ -1720,34 +1745,62 @@ function setupEventListeners() {
   const exportJsonBtn = document.getElementById('export-json-btn');
   if (exportJsonBtn) {
     exportJsonBtn.addEventListener('click', () => {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(state.exportAllData(), null, 2));
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const timestamp = `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+      const filename = `WeeklyDinner_Backup_${timestamp}.json`;
+
+      const dataAll = state.exportAllData();
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(dataAll, null, 2));
       const downloadAnchor = document.createElement('a');
       downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", `WeeklyDinner_Backup_${new Date().toISOString().split('T')[0]}.json`);
+      downloadAnchor.setAttribute("download", filename);
       document.body.appendChild(downloadAnchor);
       downloadAnchor.click();
       downloadAnchor.remove();
+
+      state.saveBackupHistory(filename, dataAll);
+
+      const displayEl = document.getElementById('export-filename-display');
+      const textEl = document.getElementById('export-filename-text');
+      if (displayEl && textEl) {
+        textEl.innerText = `書き出し完了: ${filename}`;
+        displayEl.style.display = 'block';
+      }
+
+      showToast(`バックアップファイルを書き出しました: ${filename}`);
     });
   }
 
   const importJsonInput = document.getElementById('import-json-input');
   if (importJsonInput) {
-    importJsonInput.addEventListener('change', (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (event) => {
+    importJsonInput.addEventListener('change', async (e) => {
+      const files = Array.from(e.target.files);
+      if (!files || files.length === 0) return;
+
+      const loadedItems = [];
+      for (const file of files) {
         try {
-          const imported = JSON.parse(event.target.result);
-          if (state.importAllData(imported)) {
-            showToast('バックアップファイルからデータを復元しました！');
-            renderApp();
-          }
+          const text = await file.text();
+          const json = JSON.parse(text);
+          const item = {
+            filename: file.name,
+            displayName: formatBackupDisplayName(file.name),
+            data: json
+          };
+          loadedItems.push(item);
+          state.saveBackupHistory(file.name, json);
         } catch (err) {
-          alert('JSONファイルの読み込み失敗: ' + err.message);
+          console.warn('Backup file parse error:', file.name, err);
         }
-      };
-      reader.readAsText(file);
+      }
+
+      if (loadedItems.length > 0) {
+        openRestoreSelectorModal(loadedItems);
+      } else {
+        alert('有効なJSONバックアップファイルを読み込めませんでした。');
+      }
+      e.target.value = '';
     });
   }
 
@@ -1756,19 +1809,132 @@ function setupEventListeners() {
 }
 
 function openEditDayModal(dayKey) {
+  state.editingSourceDayKey = dayKey;
   state.editingDayKey = dayKey;
   const days = getOrderedDaysOfWeek();
-  const dayInfo = days.find(d => d.key === dayKey) || DAYS_OF_WEEK_BASE.find(d => d.key === dayKey);
+  const dayInfo = days.find(d => d.key === dayKey) || DAYS_OF_WEEK_BASE.find(d => d.key === dayKey) || { label: dayKey };
   const dayRaw = state.currentPlan.days[dayKey];
 
   state.editingDayData = JSON.parse(JSON.stringify(normalizeDayData(dayRaw)));
 
-  document.getElementById('modal-day-title').innerText = `${dayInfo.label}の献立・食材編集`;
+  const titleEl = document.getElementById('modal-day-title');
+  if (titleEl) titleEl.innerText = `${dayInfo.label}の献立・食材編集`;
+
+  const daySelect = document.getElementById('modal-day-key-select');
+  if (daySelect) {
+    daySelect.value = dayKey;
+  }
   
   renderModalDishesList();
 
   const modal = document.getElementById('edit-day-modal');
+  if (modal) modal.classList.add('active');
+}
+
+let selectedRestoreData = null;
+
+function openRestoreSelectorModal(customItems = null) {
+  const modal = document.getElementById('restore-selector-modal');
+  const container = document.getElementById('restore-backups-list');
+  const confirmBtn = document.getElementById('confirm-restore-btn');
+  if (!modal || !container || !confirmBtn) return;
+
+  let items = customItems;
+  if (!items || items.length === 0) {
+    const history = state.backupHistory || [];
+    items = history.map(h => ({
+      filename: h.filename,
+      displayName: formatBackupDisplayName(h.filename),
+      data: h.data
+    }));
+  }
+
+  if (items.length === 0) {
+    container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);">選択できるバックアップデータがありません。</div>';
+    confirmBtn.disabled = true;
+    modal.classList.add('active');
+    return;
+  }
+
+  selectedRestoreData = null;
+  confirmBtn.disabled = true;
+
+  let html = '';
+  items.forEach((item, idx) => {
+    html += `
+      <label class="restore-item-row" data-idx="${idx}" style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:var(--radius-md);cursor:pointer;">
+        <input type="radio" name="restore-option" value="${idx}" style="width:18px;height:18px;cursor:pointer;">
+        <div style="flex:1;">
+          <div style="font-weight:700;font-size:0.92rem;color:#1e293b;">
+            ${escapeHtml(item.displayName)}
+          </div>
+          ${item.displayName !== item.filename ? `<div style="font-size:0.75rem;color:var(--text-subtle);margin-top:2px;">(ファイル名: ${escapeHtml(item.filename)})</div>` : ''}
+        </div>
+      </label>
+    `;
+  });
+
+  container.innerHTML = html;
+  if (window.lucide) window.lucide.createIcons();
+
+  container.querySelectorAll('input[name="restore-option"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+      const idx = parseInt(e.target.value);
+      if (items[idx]) {
+        selectedRestoreData = items[idx];
+        confirmBtn.disabled = false;
+      }
+    });
+  });
+
   modal.classList.add('active');
+}
+
+let currentCopySourceDayKey = null;
+
+function openCopyDayModal(sourceDayKey) {
+  currentCopySourceDayKey = sourceDayKey;
+  const sourceDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === sourceDayKey) || { label: sourceDayKey };
+  const modal = document.getElementById('copy-day-modal');
+  const titleEl = document.getElementById('copy-modal-title');
+  if (titleEl) titleEl.innerText = `「${sourceDayInfo.label}」のメニュー＆食材コピー`;
+
+  const select = document.getElementById('target-copy-day-select');
+  if (select) {
+    const daysKeys = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    const sIdx = daysKeys.indexOf(sourceDayKey);
+    const nextKey = daysKeys[(sIdx + 1) % 7];
+    select.value = nextKey;
+  }
+
+  if (modal) modal.classList.add('active');
+}
+
+function copyDayMenu(sourceDayKey, targetDayKey) {
+  if (!sourceDayKey || !targetDayKey) return;
+  const sourceRaw = state.currentPlan.days[sourceDayKey];
+  if (!sourceRaw) return;
+
+  const normalized = normalizeDayData(sourceRaw);
+  const deepCopy = JSON.parse(JSON.stringify(normalized));
+
+  deepCopy.dishes.forEach((d, dIdx) => {
+    d.id = 'dish_copy_' + Date.now() + '_' + dIdx + '_' + Math.random().toString(36).substr(2, 4);
+    if (d.ingredients && Array.isArray(d.ingredients)) {
+      d.ingredients.forEach((ing, iIdx) => {
+        ing.id = 'ing_copy_' + Date.now() + '_' + iIdx + '_' + Math.random().toString(36).substr(2, 4);
+      });
+    }
+  });
+
+  state.currentPlan.days[targetDayKey] = deepCopy;
+  state.saveLocal();
+
+  const sourceDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === sourceDayKey) || { label: sourceDayKey };
+  const targetDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === targetDayKey) || { label: targetDayKey };
+
+  renderApp();
+  showToast(`「${sourceDayInfo.label}」のメニューと食材を「${targetDayInfo.label}」にコピーしました！`);
 }
 
 function renderModalDishesList() {
@@ -1964,6 +2130,26 @@ function setupModalHandlers() {
   const closeBtn = document.getElementById('close-modal-btn');
   const saveBtn = document.getElementById('save-modal-btn');
   const addDishBlockBtn = document.getElementById('add-dish-block-btn');
+  const dayKeySelect = document.getElementById('modal-day-key-select');
+  const copyModalBtn = document.getElementById('copy-day-menu-modal-btn');
+
+  if (dayKeySelect) {
+    dayKeySelect.addEventListener('change', (e) => {
+      const newDayKey = e.target.value;
+      state.editingDayKey = newDayKey;
+      const dayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === newDayKey) || { label: newDayKey };
+      const titleEl = document.getElementById('modal-day-title');
+      if (titleEl) titleEl.innerText = `${dayInfo.label}の献立・食材編集`;
+    });
+  }
+
+  if (copyModalBtn) {
+    copyModalBtn.addEventListener('click', () => {
+      if (state.editingDayKey) {
+        openCopyDayModal(state.editingDayKey);
+      }
+    });
+  }
 
   if (closeBtn) {
     closeBtn.addEventListener('click', () => modal.classList.remove('active'));
@@ -2014,6 +2200,52 @@ function setupModalHandlers() {
       modal.classList.remove('active');
       renderApp();
       showToast('献立と食材を保存しました！');
+    });
+  }
+
+  // Restore Modal Handlers
+  const restoreModal = document.getElementById('restore-selector-modal');
+  const closeRestoreModalBtn = document.getElementById('close-restore-modal-btn');
+  const cancelRestoreBtn = document.getElementById('cancel-restore-btn');
+  const confirmRestoreBtn = document.getElementById('confirm-restore-btn');
+
+  const closeRestoreModal = () => {
+    if (restoreModal) restoreModal.classList.remove('active');
+  };
+  if (closeRestoreModalBtn) closeRestoreModalBtn.addEventListener('click', closeRestoreModal);
+  if (cancelRestoreBtn) cancelRestoreBtn.addEventListener('click', closeRestoreModal);
+
+  if (confirmRestoreBtn) {
+    confirmRestoreBtn.addEventListener('click', () => {
+      if (!selectedRestoreData) return;
+      if (confirm(`選択したバックアップデータ「${selectedRestoreData.displayName}」でアプリのデータを復元しますか？（現在のデータが入れ替わります）`)) {
+        state.importAllData(selectedRestoreData.data);
+        closeRestoreModal();
+        renderApp();
+        showToast(`バックアップ「${selectedRestoreData.displayName}」から正常に復元しました！`);
+      }
+    });
+  }
+
+  // Copy Day Modal Handlers
+  const copyModal = document.getElementById('copy-day-modal');
+  const closeCopyModalBtn = document.getElementById('close-copy-modal-btn');
+  const cancelCopyBtn = document.getElementById('cancel-copy-btn');
+  const confirmCopyBtn = document.getElementById('confirm-copy-btn');
+
+  const closeCopyModal = () => {
+    if (copyModal) copyModal.classList.remove('active');
+  };
+  if (closeCopyModalBtn) closeCopyModalBtn.addEventListener('click', closeCopyModal);
+  if (cancelCopyBtn) cancelCopyBtn.addEventListener('click', closeCopyModal);
+
+  if (confirmCopyBtn) {
+    confirmCopyBtn.addEventListener('click', () => {
+      const targetSelect = document.getElementById('target-copy-day-select');
+      if (!targetSelect || !currentCopySourceDayKey) return;
+      const targetDayKey = targetSelect.value;
+      copyDayMenu(currentCopySourceDayKey, targetDayKey);
+      closeCopyModal();
     });
   }
 

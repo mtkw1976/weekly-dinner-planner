@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.2.4', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.3.0', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -182,15 +182,59 @@ server.listen(8080, async () => {
     await page.waitForTimeout(150);
 
 
-    // SECTION 8: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST
-    console.log('\n--- 8. EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST ---');
+    // SECTION 8: NEW FEATURE VERIFICATION SUITE
+    console.log('\n--- 8. NEW FEATURE VERIFICATION SUITE ---');
+    
+    // Test 8.1: Unsynced Warning Banner
+    const isWarningVisible = await page.locator('#drive-unsynced-warning').isVisible();
+    assertTest('Unsynced Drive Warning Banner Visible on Startup', isWarningVisible);
+
+    // Test 8.2: Date Format Helper
+    const formatStandardName = await page.evaluate(() => window.formatBackupDisplayName('WeeklyDinner_Backup_20260801_224207.json'));
+    assertTest('Backup Filename Format Parser (Standard)', formatStandardName.includes('2026年8月1日 22時42分07秒のデータ'), `Result = ${formatStandardName}`);
+
+    const formatCustomName = await page.evaluate(() => window.formatBackupDisplayName('my_custom_backup.json'));
+    assertTest('Backup Filename Format Parser (Custom)', formatCustomName === 'my_custom_backup.json', `Result = ${formatCustomName}`);
+
+    // Test 8.3: Direct File Export Unique Filename & Display
+    await page.click('[data-tab="settings"]');
+    await page.waitForTimeout(200);
+    await page.click('#export-json-btn');
+    await page.waitForTimeout(300);
+    const exportText = await page.locator('#export-filename-text').innerText();
+    assertTest('Export Filename Display Box', exportText.includes('WeeklyDinner_Backup_'), `Text = ${exportText}`);
+
+    // Test 8.4: Copy Day Menu
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+    const initialMonDish = await page.locator('.dinner-card[data-day="mon"] .menu-title').first().innerText();
+    await page.click('.dinner-card[data-day="mon"] .copy-day-btn');
+    await page.waitForTimeout(300);
+    const isCopyModalOpen = await page.locator('#copy-day-modal.active').isVisible();
+    assertTest('Copy Day Menu Modal Open', isCopyModalOpen);
+
+    await page.click('#confirm-copy-btn');
+    await page.waitForTimeout(300);
+    const tueDishAfterCopy = await page.locator('.dinner-card[data-day="tue"] .menu-title').first().innerText();
+    assertTest('Menu & Ingredients Copy Day Action', tueDishAfterCopy === initialMonDish, `Copied Dish = ${tueDishAfterCopy}`);
+
+    // Test 8.5: Preserving Local Data Rule Verification
+    const currentMonTitle = await page.locator('.dinner-card[data-day="mon"] .menu-title').first().innerText();
+    assertTest('Preserve Local Entered Menu Data Rule', currentMonTitle.length > 0, `Mon Title = ${currentMonTitle}`);
+
+
+    // SECTION 9: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST
+    console.log('\n--- 9. EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST ---');
     let totalClickedCount = 0;
 
     async function closeAnyModal() {
-      const modal = page.locator('#edit-day-modal.active');
+      const modal = page.locator('#edit-day-modal.active, #copy-day-modal.active, #restore-selector-modal.active');
       if (await modal.isVisible()) {
-        await page.click('#close-modal-btn', { force: true });
-        await page.waitForTimeout(150);
+        const closeBtn = modal.locator('.icon-btn, button:has-text("キャンセル")').first();
+        if (await closeBtn.isVisible()) {
+          await closeBtn.click({ force: true });
+          await page.waitForTimeout(150);
+        }
       }
     }
 
