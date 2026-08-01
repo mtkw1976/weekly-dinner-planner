@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.4.2', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.5.0', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -138,14 +138,14 @@ server.listen(8080, async () => {
     console.log('\n--- 5. TAB SWITCHING PAGE VISIBILITY ISOLATION ---');
     await page.click('[data-tab="shopping"]');
     await page.waitForTimeout(300);
-    const plannerOnShopping = await page.locator('#page-planner').isVisible();
     const shoppingOnShopping = await page.locator('#page-shopping').isVisible();
+    const plannerOnShopping = await page.locator('#page-planner').isVisible();
     assertTest('Shopping Tab Visibility Isolation', !plannerOnShopping && shoppingOnShopping, 'Planner hidden, Shopping visible');
 
     await page.click('[data-tab="settings"]');
     await page.waitForTimeout(300);
-    const plannerOnSettings = await page.locator('#page-planner').isVisible();
     const settingsOnSettings = await page.locator('#page-settings').isVisible();
+    const plannerOnSettings = await page.locator('#page-planner').isVisible();
     assertTest('Settings Tab Visibility Isolation', !plannerOnSettings && settingsOnSettings, 'Planner hidden, Settings visible');
 
     await page.click('[data-tab="planner"]');
@@ -227,17 +227,32 @@ server.listen(8080, async () => {
     assertTest('History Archive Single Dish Render (Monday)', monHistDish === '和風ハンバーグ', `Mon Dish = ${monHistDish}`);
     assertTest('History Archive Multi Dish Render (Tuesday)', tueHistDish === '醤油ラーメン / 餃子', `Tue Dish = ${tueHistDish}`);
 
-    await page.click('[data-tab="planner"]');
-    await page.waitForTimeout(200);
+    // Test 8.4: Copy Specific History Dish to Current Week Day (e.g. History Tuesday -> Current Week Wednesday)
+    await page.click('.history-card:has-text("テスト履歴データ") .history-menu-item:has-text("火曜") .copy-hist-day-btn');
+    await page.waitForTimeout(300);
+    const isHistCopyModalVisible = await page.locator('#copy-history-day-modal.active').isVisible();
+    assertTest('Copy History Day Item Modal Open', isHistCopyModalVisible);
 
-    // Test 8.4: Date Format Helper
+    await page.selectOption('#target-copy-hist-day-select', 'wed');
+    await page.waitForTimeout(150);
+    await page.click('#confirm-copy-hist-btn');
+    await page.waitForTimeout(300);
+
+    const isPlannerTabActiveAfterCopy = await page.locator('#page-planner').isVisible();
+    assertTest('Auto Switch to Planner Tab after History Dish Copy', isPlannerTabActiveAfterCopy);
+
+    const wedCopiedDishText = await page.locator('.dinner-card[data-day="wed"] .menu-title').first().innerText();
+    assertTest('History Dish Copy Result on Current Week Wednesday', wedCopiedDishText.includes('醤油ラーメン') || wedCopiedDishText.includes('餃子'), `Wed Dish = ${wedCopiedDishText}`);
+
+
+    // Test 8.5: Date Format Helper
     const formatStandardName = await page.evaluate(() => window.formatBackupDisplayName('WeeklyDinner_Backup_20260801_224207.json'));
     assertTest('Backup Filename Format Parser (Standard)', formatStandardName.includes('2026年8月1日 22時42分07秒のデータ'), `Result = ${formatStandardName}`);
 
     const formatCustomName = await page.evaluate(() => window.formatBackupDisplayName('my_custom_backup.json'));
     assertTest('Backup Filename Format Parser (Custom)', formatCustomName === 'my_custom_backup.json', `Result = ${formatCustomName}`);
 
-    // Test 8.5: Direct File Export Unique Filename & Display
+    // Test 8.6: Direct File Export Unique Filename & Display
     await page.click('[data-tab="settings"]');
     await page.waitForTimeout(200);
     await page.click('#export-json-btn');
@@ -245,7 +260,7 @@ server.listen(8080, async () => {
     const exportText = await page.locator('#export-filename-text').innerText();
     assertTest('Export Filename Display Box', exportText.includes('WeeklyDinner_Backup_'), `Text = ${exportText}`);
 
-    // Test 8.6: Copy Day Menu
+    // Test 8.7: Copy Day Menu
     await page.click('[data-tab="planner"]');
     await page.waitForTimeout(200);
     const initialMonDish = await page.locator('.dinner-card[data-day="mon"] .menu-title').first().innerText();
@@ -316,7 +331,7 @@ server.listen(8080, async () => {
     let totalClickedCount = 0;
 
     async function closeAnyModal() {
-      const modal = page.locator('#edit-day-modal.active, #copy-day-modal.active, #restore-selector-modal.active');
+      const modal = page.locator('#edit-day-modal.active, #copy-day-modal.active, #copy-history-day-modal.active, #restore-selector-modal.active');
       if (await modal.isVisible()) {
         const closeBtn = modal.locator('.icon-btn, button:has-text("キャンセル")').first();
         if (await closeBtn.isVisible()) {

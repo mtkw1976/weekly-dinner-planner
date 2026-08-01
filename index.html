@@ -37,7 +37,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <span class="brand-title">献立＆買い物ノート ✨</span>
-          <span class="version-badge">v2.4.2</span>
+          <span class="version-badge">v2.5.0</span>
         </div>
       </div>
       <div class="header-actions">
@@ -467,6 +467,49 @@
         <button id="cancel-copy-btn" class="btn btn-secondary">キャンセル</button>
         <button id="confirm-copy-btn" class="btn btn-indigo" style="padding:8px 16px;">
           <i data-lucide="copy" style="width:16px;height:16px;"></i> この曜日にコピー
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Copy History Day Item Modal -->
+  <div id="copy-history-day-modal" class="modal-overlay">
+    <div class="modal-card" style="max-width:460px;">
+      <div class="modal-header">
+        <div class="modal-title" style="display:flex;align-items:center;gap:8px;">
+          <i data-lucide="history" style="width:20px;height:20px;color:var(--accent-indigo);"></i>
+          <span id="copy-hist-modal-title">履歴献立を今週にコピー</span>
+        </div>
+        <button id="close-copy-hist-modal-btn" class="icon-btn">
+          <i data-lucide="x" style="width:18px;height:18px;"></i>
+        </button>
+      </div>
+      <div style="background:#f1f5f9;padding:10px 14px;border-radius:var(--radius-md);margin-bottom:14px;font-size:0.88rem;border:1px solid #e2e8f0;">
+        <div style="font-weight:700;color:var(--text-main);" id="copy-hist-source-info">対象献立: -</div>
+      </div>
+      <div class="form-group" style="margin-bottom:14px;">
+        <label class="form-label">今週のコピー先曜日</label>
+        <select id="target-copy-hist-day-select" class="form-select" style="font-weight:700;">
+          <option value="mon">月曜日</option>
+          <option value="tue">火曜日</option>
+          <option value="wed">水曜日</option>
+          <option value="thu">木曜日</option>
+          <option value="fri">金曜日</option>
+          <option value="sat">土曜日</option>
+          <option value="sun">日曜日</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:18px;">
+        <label class="form-label">コピー方法</label>
+        <select id="copy-hist-mode-select" class="form-select" style="font-size:0.85rem;">
+          <option value="append" selected>既存の献立に追加（おすすめ・複数カード）</option>
+          <option value="replace">既存の献立を上書き（リセットして置換）</option>
+        </select>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button id="cancel-copy-hist-btn" class="btn btn-secondary">キャンセル</button>
+        <button id="confirm-copy-hist-btn" class="btn btn-indigo" style="padding:8px 16px;font-weight:700;">
+          <i data-lucide="copy" style="width:16px;height:16px;"></i> 今週にコピーして開く
         </button>
       </div>
     </div>

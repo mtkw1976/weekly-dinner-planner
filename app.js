@@ -460,7 +460,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.4.2',
+      version: '2.5.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -1254,9 +1254,18 @@ function renderHistoryPage() {
             const dishTitleStr = validDishes.map(dish => dish.title.trim()).join(' / ');
             const mainRating = validDishes.length > 0 && typeof validDishes[0].rating === 'number' ? validDishes[0].rating : 5;
             return `
-              <div class="history-menu-item">
-                <div class="history-day">${d.short}曜 <span style="color:#ffb703;">${'★'.repeat(mainRating)}</span></div>
-                <div class="history-dish" style="font-weight:700;">${escapeHtml(dishTitleStr || '-')}</div>
+              <div class="history-menu-item" style="display:flex;flex-direction:column;justify-content:space-between;gap:6px;">
+                <div>
+                  <div class="history-day" style="display:flex;align-items:center;justify-content:space-between;">
+                    <span>${d.short}曜 <span style="color:#ffb703;">${'★'.repeat(mainRating)}</span></span>
+                  </div>
+                  <div class="history-dish" style="font-weight:700;">${escapeHtml(dishTitleStr || '-')}</div>
+                </div>
+                ${dishTitleStr ? `
+                  <button class="btn btn-secondary btn-sm copy-hist-day-btn" data-hist-id="${hist.id}" data-day-key="${d.key}" style="font-size:0.72rem;padding:3px 8px;align-self:flex-start;color:var(--accent-indigo);border-color:rgba(99,102,241,0.3);margin-top:4px;font-weight:700;">
+                    <i data-lucide="copy" style="width:11px;height:11px;"></i> 今週にコピー
+                  </button>
+                ` : ''}
               </div>
             `;
           }).join('')}
@@ -1266,15 +1275,24 @@ function renderHistoryPage() {
   });
 
   container.innerHTML = html;
+  if (window.lucide) window.lucide.createIcons();
+
+  container.querySelectorAll('.copy-hist-day-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const histId = btn.getAttribute('data-hist-id');
+      const dayKey = btn.getAttribute('data-day-key');
+      openCopyHistoryDayModal(histId, dayKey);
+    });
+  });
 
   container.querySelectorAll('.restore-hist-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const histId = btn.getAttribute('data-hist-id');
       const targetHist = state.history.find(h => h.id === histId);
-      if (targetHist && confirm('この過去の献立を現在の「今週の献立」に上書きコピーしますか？')) {
+      if (targetHist && confirm('この過去の週の献立を全曜日まるごと現在の「今週の献立」に上書き複製しますか？')) {
         state.currentPlan.days = JSON.parse(JSON.stringify(targetHist.plan.days));
         state.saveLocal();
-        showToast('過去の献立を今週にコピーしました！');
+        showToast('過去の週の献立を全曜日まるごとコピーしました！');
         switchTab('planner');
       }
     });
@@ -1952,6 +1970,83 @@ function copyDayMenu(sourceDayKey, targetDayKey) {
   showToast(`「${sourceDayInfo.label}」のメニューと食材を「${targetDayInfo.label}」にコピーしました！`);
 }
 
+let pendingCopyHistId = null;
+let pendingCopyHistDayKey = null;
+
+function openCopyHistoryDayModal(histId, dayKey) {
+  pendingCopyHistId = histId;
+  pendingCopyHistDayKey = dayKey;
+
+  const targetHist = state.history.find(h => h.id === histId);
+  if (!targetHist || !targetHist.plan || !targetHist.plan.days) return;
+
+  const dayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === dayKey) || { label: dayKey };
+  const dayRaw = targetHist.plan.days[dayKey];
+  const dayData = normalizeDayData(dayRaw);
+  const validDishes = dayData.dishes.filter(d => d && d.title.trim() !== '');
+  const dishTitleStr = validDishes.map(d => d.title.trim()).join(' / ') || '献立なし';
+
+  const modal = document.getElementById('copy-history-day-modal');
+  const infoEl = document.getElementById('copy-hist-source-info');
+  const targetSelect = document.getElementById('target-copy-hist-day-select');
+
+  if (infoEl) {
+    infoEl.innerText = `コピー元: 履歴「${targetHist.title || '過去の献立'}」の${dayInfo.label} (${dishTitleStr})`;
+  }
+  if (targetSelect) {
+    targetSelect.value = dayKey;
+  }
+  if (modal) modal.classList.add('active');
+}
+
+function copyHistoryDayMenu(histId, dayKey, targetDayKey, mode = 'append') {
+  if (!histId || !dayKey || !targetDayKey) return;
+  const targetHist = state.history.find(h => h.id === histId);
+  if (!targetHist || !targetHist.plan || !targetHist.plan.days) return;
+
+  const dayRaw = targetHist.plan.days[dayKey];
+  if (!dayRaw) return;
+
+  const normalized = normalizeDayData(dayRaw);
+  const validDishes = normalized.dishes.filter(d => d && (d.title.trim() !== '' || (d.ingredients && d.ingredients.length > 0) || d.memo.trim() !== ''));
+
+  if (validDishes.length === 0) {
+    showToast('コピー対象の献立が空です');
+    return;
+  }
+
+  const deepCopiedDishes = JSON.parse(JSON.stringify(validDishes));
+  deepCopiedDishes.forEach((d, dIdx) => {
+    d.id = 'dish_hist_' + Date.now() + '_' + dIdx + '_' + Math.random().toString(36).substr(2, 4);
+    d.dayKey = targetDayKey;
+    if (d.ingredients && Array.isArray(d.ingredients)) {
+      d.ingredients.forEach((ing, iIdx) => {
+        ing.id = 'ing_hist_' + Date.now() + '_' + iIdx + '_' + Math.random().toString(36).substr(2, 4);
+        ing.checked = false;
+      });
+    }
+  });
+
+  const existingTargetData = normalizeDayData(state.currentPlan.days[targetDayKey]);
+  if (mode === 'replace') {
+    existingTargetData.dishes = deepCopiedDishes;
+  } else {
+    // append mode
+    const existingValid = existingTargetData.dishes.filter(d => d.title.trim() !== '' || (d.ingredients && d.ingredients.length > 0) || d.memo.trim() !== '');
+    existingTargetData.dishes = [...existingValid, ...deepCopiedDishes];
+  }
+
+  state.currentPlan.days[targetDayKey] = existingTargetData;
+  state.saveLocal();
+
+  const targetDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === targetDayKey) || { label: targetDayKey };
+  const copiedDishTitles = deepCopiedDishes.map(d => d.title).join(' / ');
+
+  renderApp();
+  switchTab('planner');
+  showToast(`履歴の献立「${copiedDishTitles}」を今週の「${targetDayInfo.label}」にコピーしました！✨`);
+}
+
 function renderModalDishesList() {
   const container = document.getElementById('modal-dishes-container');
   if (!container || !state.editingDayData) return;
@@ -2331,6 +2426,31 @@ function setupModalHandlers() {
       const targetDayKey = targetSelect.value;
       copyDayMenu(currentCopySourceDayKey, targetDayKey);
       closeCopyModal();
+    });
+  }
+
+  // Copy History Day Item Modal Handlers
+  const copyHistModal = document.getElementById('copy-history-day-modal');
+  const closeCopyHistBtn = document.getElementById('close-copy-hist-modal-btn');
+  const cancelCopyHistBtn = document.getElementById('cancel-copy-hist-btn');
+  const confirmCopyHistBtn = document.getElementById('confirm-copy-hist-btn');
+
+  const closeCopyHistModal = () => {
+    if (copyHistModal) copyHistModal.classList.remove('active');
+  };
+  if (closeCopyHistBtn) closeCopyHistBtn.addEventListener('click', closeCopyHistModal);
+  if (cancelCopyHistBtn) cancelCopyHistBtn.addEventListener('click', closeCopyHistModal);
+
+  if (confirmCopyHistBtn) {
+    confirmCopyHistBtn.addEventListener('click', () => {
+      if (pendingCopyHistId && pendingCopyHistDayKey) {
+        const targetSelect = document.getElementById('target-copy-hist-day-select');
+        const modeSelect = document.getElementById('copy-hist-mode-select');
+        const targetDayKey = targetSelect ? targetSelect.value : 'mon';
+        const mode = modeSelect ? modeSelect.value : 'append';
+        copyHistoryDayMenu(pendingCopyHistId, pendingCopyHistDayKey, targetDayKey, mode);
+        closeCopyHistModal();
+      }
     });
   }
 
