@@ -460,7 +460,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.4.1',
+      version: '2.4.2',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -1248,12 +1248,15 @@ function renderHistoryPage() {
 
         <div class="history-menu-grid">
           ${getOrderedDaysOfWeek().map(d => {
-            const dayData = hist.plan && hist.plan.days ? hist.plan.days[d.key] : null;
-            const r = dayData && dayData.rating ? dayData.rating : 5;
+            const dayRaw = hist.plan && hist.plan.days ? hist.plan.days[d.key] : null;
+            const dayData = normalizeDayData(dayRaw);
+            const validDishes = dayData.dishes.filter(dish => dish && typeof dish.title === 'string' && dish.title.trim() !== '');
+            const dishTitleStr = validDishes.map(dish => dish.title.trim()).join(' / ');
+            const mainRating = validDishes.length > 0 && typeof validDishes[0].rating === 'number' ? validDishes[0].rating : 5;
             return `
               <div class="history-menu-item">
-                <div class="history-day">${d.short}曜 <span style="color:#ffb703;">${'★'.repeat(r)}</span></div>
-                <div class="history-dish">${escapeHtml(dayData ? dayData.dish || '-' : '-')}</div>
+                <div class="history-day">${d.short}曜 <span style="color:#ffb703;">${'★'.repeat(mainRating)}</span></div>
+                <div class="history-dish" style="font-weight:700;">${escapeHtml(dishTitleStr || '-')}</div>
               </div>
             `;
           }).join('')}

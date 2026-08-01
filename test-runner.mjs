@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.4.1', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.4.2', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -201,14 +201,43 @@ server.listen(8080, async () => {
     await page.click('[data-tab="planner"]');
     await page.waitForTimeout(200);
 
-    // Test 8.3: Date Format Helper
+    // Test 8.3: History Archive Dish Title Rendering Test
+    await page.evaluate(() => {
+      window.state.history = [{
+        id: 'hist_test_1',
+        title: 'テスト履歴データ',
+        startDate: '2026-08-01',
+        savedAt: new Date().toISOString(),
+        plan: {
+          days: {
+            mon: { dishes: [{ title: '和風ハンバーグ', rating: 5 }] },
+            tue: { dishes: [{ title: '醤油ラーメン', rating: 4 }, { title: '餃子', rating: 5 }] }
+          }
+        }
+      }];
+      window.state.saveLocal();
+      window.renderApp();
+    });
+
+    await page.click('[data-tab="history"]');
+    await page.waitForTimeout(200);
+    const monHistDish = await page.locator('.history-card:has-text("テスト履歴データ") .history-menu-item:has-text("月曜") .history-dish').innerText();
+    const tueHistDish = await page.locator('.history-card:has-text("テスト履歴データ") .history-menu-item:has-text("火曜") .history-dish').innerText();
+
+    assertTest('History Archive Single Dish Render (Monday)', monHistDish === '和風ハンバーグ', `Mon Dish = ${monHistDish}`);
+    assertTest('History Archive Multi Dish Render (Tuesday)', tueHistDish === '醤油ラーメン / 餃子', `Tue Dish = ${tueHistDish}`);
+
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+
+    // Test 8.4: Date Format Helper
     const formatStandardName = await page.evaluate(() => window.formatBackupDisplayName('WeeklyDinner_Backup_20260801_224207.json'));
     assertTest('Backup Filename Format Parser (Standard)', formatStandardName.includes('2026年8月1日 22時42分07秒のデータ'), `Result = ${formatStandardName}`);
 
     const formatCustomName = await page.evaluate(() => window.formatBackupDisplayName('my_custom_backup.json'));
     assertTest('Backup Filename Format Parser (Custom)', formatCustomName === 'my_custom_backup.json', `Result = ${formatCustomName}`);
 
-    // Test 8.4: Direct File Export Unique Filename & Display
+    // Test 8.5: Direct File Export Unique Filename & Display
     await page.click('[data-tab="settings"]');
     await page.waitForTimeout(200);
     await page.click('#export-json-btn');
@@ -216,7 +245,7 @@ server.listen(8080, async () => {
     const exportText = await page.locator('#export-filename-text').innerText();
     assertTest('Export Filename Display Box', exportText.includes('WeeklyDinner_Backup_'), `Text = ${exportText}`);
 
-    // Test 8.5: Copy Day Menu
+    // Test 8.6: Copy Day Menu
     await page.click('[data-tab="planner"]');
     await page.waitForTimeout(200);
     const initialMonDish = await page.locator('.dinner-card[data-day="mon"] .menu-title').first().innerText();
