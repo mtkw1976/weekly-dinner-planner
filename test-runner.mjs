@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.3.0', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.3.1', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
