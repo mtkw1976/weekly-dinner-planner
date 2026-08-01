@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.3.1', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.4.0', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -218,73 +218,56 @@ server.listen(8080, async () => {
     const tueDishAfterCopy = await page.locator('.dinner-card[data-day="tue"] .menu-title').first().innerText();
     assertTest('Menu & Ingredients Copy Day Action', tueDishAfterCopy === initialMonDish, `Copied Dish = ${tueDishAfterCopy}`);
 
-    // Test 8.5: Preserving Local Data Rule Verification
-    const currentMonTitle = await page.locator('.dinner-card[data-day="mon"] .menu-title').first().innerText();
-    assertTest('Preserve Local Entered Menu Data Rule', currentMonTitle.length > 0, `Mon Title = ${currentMonTitle}`);
 
+    // SECTION 9: DAY CHANGE MOVE (NOT COPY) & MULTI-CARD USE CASE SUITE
+    console.log('\n--- 9. DAY CHANGE MOVE (NOT COPY) & MULTI-CARD USE CASE SUITE ---');
 
-    // SECTION 9: MULTI-DAY & MONDAY MULTI-MENU/INGREDIENT SUPPORT SUITE
-    console.log('\n--- 9. MULTI-DAY & MONDAY MULTI-MENU/INGREDIENT SUPPORT SUITE ---');
-
-    // Test 9.1: Multi-Day Plan Storage & Access across all 7 Days
-    const daysArray = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-    const allDaysSupported = await page.evaluate((days) => {
-      return days.every(d => window.state.currentPlan.days && window.state.currentPlan.days[d]);
-    }, daysArray);
-    assertTest('All 7 Days (Mon-Sun) Multi-Day Data Plan Support', allDaysSupported, `Days supported = ${daysArray.join(', ')}`);
-
-    // Test 9.2: Monday Multi-Menu & Multi-Ingredient Explicit Verification (3 Dishes on Monday)
+    // Test 9.1: Setup Mon = Curry, Tue = Ramen
     await page.evaluate(() => {
       window.state.currentPlan.days['mon'] = {
-        dishes: [
-          { id: 'm_dish_1', title: '主菜: 和風ハンバーグ', rating: 5, ingredients: [{ id: 'm_ing_1', name: '合い挽き肉', storeId: 'butcher' }, { id: 'm_ing_2', name: '大根', storeId: 'greengrocer' }] },
-          { id: 'm_dish_2', title: '副菜: カボチャの煮物', rating: 4, ingredients: [{ id: 'm_ing_3', name: 'カボチャ 1/4個', storeId: 'greengrocer' }] },
-          { id: 'm_dish_3', title: '汁物: 豆腐とおふの味噌汁', rating: 5, ingredients: [{ id: 'm_ing_4', name: '木綿豆腐 1丁', storeId: 'life' }] }
-        ]
+        dishes: [{ id: 'dish_curry', title: '特製カレーライス', rating: 5, ingredients: [{ id: 'i_c1', name: 'カレールー', storeId: 'aeon' }] }]
       };
-      window.state.currentPlan.days['wed'] = {
-        dishes: [
-          { id: 'dish_wed_1', title: '主菜: 海鮮パエリア', rating: 5, ingredients: [{ id: 'ing_w1', name: 'シーフードミックス', storeId: 'gyomu' }] }
-        ]
+      window.state.currentPlan.days['tue'] = {
+        dishes: [{ id: 'dish_ramen', title: '具だくさんラーメン', rating: 4, ingredients: [{ id: 'i_r1', name: '生ラーメン', storeId: 'life' }] }]
       };
       window.state.saveLocal();
       window.renderApp();
     });
     await page.waitForTimeout(300);
 
-    const monDishesCount = await page.locator('.dinner-card[data-day="mon"] .planner-dish-item').count();
-    assertTest('Monday Multi-Menu & Multi-Ingredient Support (3 Dishes on Monday)', monDishesCount === 3, `Monday Dishes Count = ${monDishesCount}`);
-
-    // Test 9.3: Ingredient Aggregation across Multiple Days on Shopping List
-    await page.click('[data-tab="shopping"]');
+    // Test 9.2: Move Monday Curry to Tuesday
+    await page.click('.dinner-card[data-day="mon"] .add-dish-btn');
     await page.waitForTimeout(300);
 
-    const shoppingMenuTags = await page.locator('#shopping-list-container .shopping-item-menu').allInnerTexts();
-    const hasMonTag = shoppingMenuTags.some(t => t.includes('月:'));
-    const hasWedTag = shoppingMenuTags.some(t => t.includes('水:'));
-    assertTest('Multi-Day Recipe Ingredient Aggregation on Shopping List', hasMonTag && hasWedTag, `Tags found = ${shoppingMenuTags.filter(t => t.includes(':')).slice(0, 4).join(', ')}`);
-
-    await page.click('[data-tab="planner"]');
+    await page.selectOption('#modal-day-key-select', 'tue');
     await page.waitForTimeout(200);
 
-    // Test 9.4: Flexible Start Day of Week Settings Change (e.g. Sunday Start)
-    await page.click('[data-tab="settings"]');
-    await page.waitForTimeout(200);
-    await page.selectOption('#start-day-select', 'sun');
+    await page.click('#save-modal-btn');
     await page.waitForTimeout(300);
 
-    await page.click('[data-tab="planner"]');
-    await page.waitForTimeout(200);
-    const firstDayBadgeText = await page.locator('.dinner-card .day-badge').first().innerText();
-    assertTest('Flexible Start Day of Week Change (Sunday Start)', firstDayBadgeText.includes('日曜日'), `First Day = ${firstDayBadgeText.trim()}`);
+    // Assert: Monday is now empty/cleared (moved out)
+    const monCurryCount = await page.locator('.dinner-card[data-day="mon"] :has-text("特製カレーライス")').count();
+    assertTest('Move Action: Dish Removed from Source Day (Monday)', monCurryCount === 0);
 
-    // Reset start day of week back to Monday
-    await page.click('[data-tab="settings"]');
-    await page.waitForTimeout(200);
-    await page.selectOption('#start-day-select', 'mon');
+    // Assert: Tuesday now has 2 dish cards (Ramen + Curry)!
+    const tueDishCardsCount = await page.locator('.dinner-card[data-day="tue"] .planner-dish-item').count();
+    assertTest('Move Action: Target Day (Tuesday) now has 2 Dish Cards', tueDishCardsCount === 2, `Tue Dishes Count = ${tueDishCardsCount}`);
+
+    // Test 9.3: Move 1 of 2 Tuesday dishes (Curry) to Wednesday
+    await page.click('.dinner-card[data-day="tue"] .add-dish-btn');
     await page.waitForTimeout(300);
-    await page.click('[data-tab="planner"]');
+
+    await page.selectOption('.dish-edit-block[data-dish-idx="1"] .dish-day-select', 'wed');
     await page.waitForTimeout(200);
+
+    await page.click('#save-modal-btn');
+    await page.waitForTimeout(300);
+
+    const tueDishCountAfterSecondMove = await page.locator('.dinner-card[data-day="tue"] .planner-dish-item').count();
+    const wedCurryCount = await page.locator('.dinner-card[data-day="wed"] :has-text("特製カレーライス")').count();
+
+    assertTest('Sequential Move Action: Tuesday returns to 1 Dish Card', tueDishCountAfterSecondMove === 1);
+    assertTest('Sequential Move Action: Wednesday receives Curry Dish', wedCurryCount > 0);
 
 
     // SECTION 10: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST

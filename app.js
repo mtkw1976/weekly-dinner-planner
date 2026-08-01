@@ -460,7 +460,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.3.1',
+      version: '2.4.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -1817,6 +1817,11 @@ function openEditDayModal(dayKey) {
   const dayRaw = state.currentPlan.days[dayKey];
 
   state.editingDayData = JSON.parse(JSON.stringify(normalizeDayData(dayRaw)));
+  if (state.editingDayData && state.editingDayData.dishes) {
+    state.editingDayData.dishes.forEach(d => {
+      if (!d.dayKey) d.dayKey = dayKey;
+    });
+  }
 
   const titleEl = document.getElementById('modal-day-title');
   if (titleEl) titleEl.innerText = `${dayInfo.label}の献立・食材編集`;
@@ -1951,17 +1956,31 @@ function renderModalDishesList() {
       title: '',
       rating: 5,
       memo: '',
-      ingredients: []
+      ingredients: [],
+      dayKey: state.editingDayKey || state.editingSourceDayKey || 'mon'
     }];
   }
 
   let html = '';
   state.editingDayData.dishes.forEach((dish, dIdx) => {
+    const curDayKey = dish.dayKey || state.editingDayKey || state.editingSourceDayKey || 'mon';
     html += `
       <div class="dish-edit-block" data-dish-idx="${dIdx}" style="background:#fff5f7;border:1px solid #fecdd3;border-radius:var(--radius-md);padding:14px;">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-          <div style="font-weight:800;font-size:0.95rem;color:#372e2d;">
-            メニュー品目 #${dIdx + 1}
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+          <div style="font-weight:800;font-size:0.95rem;color:#372e2d;display:flex;align-items:center;gap:8px;">
+            <span>メニュー品目 #${dIdx + 1}</span>
+            <div style="display:inline-flex;align-items:center;gap:4px;background:#ffffff;padding:2px 8px;border-radius:12px;border:1px solid #fbcfe8;">
+              <span style="font-size:0.75rem;font-weight:700;color:var(--accent-rose);">配置先:</span>
+              <select class="form-select dish-day-select" data-dish-idx="${dIdx}" style="font-size:0.75rem;padding:2px 4px;font-weight:800;border:none;background:transparent;color:var(--text-main);cursor:pointer;">
+                <option value="mon" ${curDayKey === 'mon' ? 'selected' : ''}>月曜日</option>
+                <option value="tue" ${curDayKey === 'tue' ? 'selected' : ''}>火曜日</option>
+                <option value="wed" ${curDayKey === 'wed' ? 'selected' : ''}>水曜日</option>
+                <option value="thu" ${curDayKey === 'thu' ? 'selected' : ''}>木曜日</option>
+                <option value="fri" ${curDayKey === 'fri' ? 'selected' : ''}>金曜日</option>
+                <option value="sat" ${curDayKey === 'sat' ? 'selected' : ''}>土曜日</option>
+                <option value="sun" ${curDayKey === 'sun' ? 'selected' : ''}>日曜日</option>
+              </select>
+            </div>
           </div>
           ${state.editingDayData.dishes.length > 1 ? `
             <button type="button" class="btn btn-secondary btn-sm remove-dish-btn" data-dish-idx="${dIdx}" style="color:#f43f5e;font-size:0.75rem;padding:3px 8px;border-color:rgba(244,63,94,0.3);">
@@ -2027,6 +2046,15 @@ function renderModalDishesList() {
   if (window.lucide) window.lucide.createIcons();
 
   // Attach event handlers for multi-dish modal elements
+  container.querySelectorAll('.dish-day-select').forEach(select => {
+    select.addEventListener('change', (e) => {
+      const dIdx = parseInt(select.getAttribute('data-dish-idx'));
+      if (state.editingDayData.dishes[dIdx]) {
+        state.editingDayData.dishes[dIdx].dayKey = e.target.value;
+      }
+    });
+  });
+
   container.querySelectorAll('.dish-title-input').forEach(input => {
     input.addEventListener('input', (e) => {
       const dIdx = parseInt(input.getAttribute('data-dish-idx'));
@@ -2138,9 +2166,15 @@ function setupModalHandlers() {
     dayKeySelect.addEventListener('change', (e) => {
       const newDayKey = e.target.value;
       state.editingDayKey = newDayKey;
+      if (state.editingDayData && state.editingDayData.dishes) {
+        state.editingDayData.dishes.forEach(d => {
+          d.dayKey = newDayKey;
+        });
+      }
       const dayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === newDayKey) || { label: newDayKey };
       const titleEl = document.getElementById('modal-day-title');
       if (titleEl) titleEl.innerText = `${dayInfo.label}の献立・食材編集`;
+      renderModalDishesList();
     });
   }
 
@@ -2164,7 +2198,8 @@ function setupModalHandlers() {
         title: '',
         rating: 5,
         memo: '',
-        ingredients: []
+        ingredients: [],
+        dayKey: state.editingDayKey || state.editingSourceDayKey || 'mon'
       });
       renderModalDishesList();
     });
@@ -2172,7 +2207,9 @@ function setupModalHandlers() {
 
   if (saveBtn) {
     saveBtn.addEventListener('click', () => {
-      if (!state.editingDayKey || !state.editingDayData) return;
+      if (!state.editingSourceDayKey || !state.editingDayData) return;
+
+      const sourceDayKey = state.editingSourceDayKey;
 
       // Filter empty ingredients
       state.editingDayData.dishes.forEach(d => {
@@ -2182,25 +2219,63 @@ function setupModalHandlers() {
       });
 
       // Filter out completely empty dishes unless it's the only one
-      state.editingDayData.dishes = state.editingDayData.dishes.filter(d => 
+      const validDishes = state.editingDayData.dishes.filter(d => 
         d.title.trim() !== '' || (d.ingredients && d.ingredients.length > 0) || d.memo.trim() !== ''
       );
 
-      if (state.editingDayData.dishes.length === 0) {
-        state.editingDayData.dishes = [{
-          id: 'dish_' + Date.now(),
-          title: '',
-          rating: 5,
-          memo: '',
-          ingredients: []
-        }];
+      // Group dishes by target day (dish.dayKey || state.editingDayKey || sourceDayKey)
+      const dishesByTargetDay = {};
+      const targetDayNames = [];
+
+      if (validDishes.length === 0) {
+        state.currentPlan.days[sourceDayKey] = {
+          dishes: [{ id: 'dish_' + Date.now(), title: '', rating: 5, memo: '', ingredients: [] }]
+        };
+      } else {
+        validDishes.forEach(dish => {
+          const targetKey = dish.dayKey || state.editingDayKey || sourceDayKey;
+          if (!dishesByTargetDay[targetKey]) dishesByTargetDay[targetKey] = [];
+          dishesByTargetDay[targetKey].push(dish);
+        });
+
+        // 1. Reset source day if no dishes remain assigned to sourceDayKey
+        if (!dishesByTargetDay[sourceDayKey]) {
+          state.currentPlan.days[sourceDayKey] = {
+            dishes: [{ id: 'dish_' + Date.now(), title: '', rating: 5, memo: '', ingredients: [] }]
+          };
+        } else {
+          state.currentPlan.days[sourceDayKey] = { dishes: dishesByTargetDay[sourceDayKey] };
+        }
+
+        // 2. Append moved dishes to each target day
+        Object.keys(dishesByTargetDay).forEach(targetKey => {
+          if (targetKey === sourceDayKey) return; // Already handled above
+
+          const targetDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === targetKey) || { label: targetKey };
+          targetDayNames.push(targetDayInfo.label);
+
+          const existingTargetData = normalizeDayData(state.currentPlan.days[targetKey]);
+          const existingTargetDishes = existingTargetData.dishes.filter(d => 
+            d.title.trim() !== '' || (d.ingredients && d.ingredients.length > 0) || d.memo.trim() !== ''
+          );
+
+          const newMovedDishes = dishesByTargetDay[targetKey];
+
+          // Combine existing target dishes + newly moved dishes!
+          existingTargetData.dishes = [...existingTargetDishes, ...newMovedDishes];
+          state.currentPlan.days[targetKey] = existingTargetData;
+        });
       }
 
-      state.currentPlan.days[state.editingDayKey] = state.editingDayData;
       state.saveLocal();
       modal.classList.remove('active');
       renderApp();
-      showToast('献立と食材を保存しました！');
+
+      if (targetDayNames.length > 0) {
+        showToast(`献立を「${targetDayNames.join(', ')}」へ移動しました！`);
+      } else {
+        showToast('献立と食材を保存しました！');
+      }
     });
   }
 
