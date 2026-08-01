@@ -632,6 +632,7 @@ function renderApp() {
   try { renderSettingsPage(); } catch (e) { console.error('Settings render error:', e); }
   initIcons();
 }
+window.renderApp = renderApp;
 
 /* ==========================================================================
    1. Weekly Dinner Planner Page Render

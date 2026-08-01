@@ -223,8 +223,69 @@ server.listen(8080, async () => {
     assertTest('Preserve Local Entered Menu Data Rule', currentMonTitle.length > 0, `Mon Title = ${currentMonTitle}`);
 
 
-    // SECTION 9: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST
-    console.log('\n--- 9. EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST ---');
+    // SECTION 9: MULTI-DAY SUPPORT & FLEXIBLE WEEK START SUITE
+    console.log('\n--- 9. MULTI-DAY SUPPORT & FLEXIBLE WEEK START SUITE ---');
+
+    // Test 9.1: Multi-Day Plan Storage & Access across all 7 Days
+    const daysArray = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+    const allDaysSupported = await page.evaluate((days) => {
+      return days.every(d => window.state.currentPlan.days && window.state.currentPlan.days[d]);
+    }, daysArray);
+    assertTest('All 7 Days (Mon-Sun) Multi-Day Data Plan Support', allDaysSupported, `Days supported = ${daysArray.join(', ')}`);
+
+    // Test 9.2: Multi-Dish Support per Single Day & Multi-Day Recipe Setup
+    await page.evaluate(() => {
+      window.state.currentPlan.days['mon'] = {
+        dishes: [{ id: 'dish_mon_1', title: '主菜: 特製カレー', rating: 5, ingredients: [{ id: 'ing_m1', name: 'カレールー', storeId: 'aeon' }] }]
+      };
+      window.state.currentPlan.days['wed'] = {
+        dishes: [
+          { id: 'dish_wed_1', title: '主菜: ハンバーグ', rating: 5, ingredients: [{ id: 'ing_w1', name: '合い挽き肉', storeId: 'butcher' }] },
+          { id: 'dish_wed_2', title: '副菜: ポテトサラダ', rating: 4, ingredients: [{ id: 'ing_w2', name: 'じゃがいも', storeId: 'greengrocer' }] }
+        ]
+      };
+      window.state.saveLocal();
+      window.renderApp();
+    });
+    await page.waitForTimeout(300);
+
+    const wedDishesCount = await page.locator('.dinner-card[data-day="wed"] .planner-dish-item').count();
+    assertTest('Multi-Dish Support per Single Day (Wednesday 2 Dishes)', wedDishesCount === 2, `Wed Dishes Count = ${wedDishesCount}`);
+
+    // Test 9.3: Ingredient Aggregation across Multiple Days on Shopping List
+    await page.click('[data-tab="shopping"]');
+    await page.waitForTimeout(300);
+
+    const shoppingMenuTags = await page.locator('#shopping-list-container .shopping-item-menu').allInnerTexts();
+    const hasMonTag = shoppingMenuTags.some(t => t.includes('月:'));
+    const hasWedTag = shoppingMenuTags.some(t => t.includes('水:'));
+    assertTest('Multi-Day Recipe Ingredient Aggregation on Shopping List', hasMonTag && hasWedTag, `Tags found = ${shoppingMenuTags.filter(t => t.includes(':')).slice(0, 4).join(', ')}`);
+
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+
+    // Test 9.4: Flexible Start Day of Week Settings Change (e.g. Sunday Start)
+    await page.click('[data-tab="settings"]');
+    await page.waitForTimeout(200);
+    await page.selectOption('#start-day-select', 'sun');
+    await page.waitForTimeout(300);
+
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+    const firstDayBadgeText = await page.locator('.dinner-card .day-badge').first().innerText();
+    assertTest('Flexible Start Day of Week Change (Sunday Start)', firstDayBadgeText.includes('日曜日'), `First Day = ${firstDayBadgeText.trim()}`);
+
+    // Reset start day of week back to Monday
+    await page.click('[data-tab="settings"]');
+    await page.waitForTimeout(200);
+    await page.selectOption('#start-day-select', 'mon');
+    await page.waitForTimeout(300);
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+
+
+    // SECTION 10: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST
+    console.log('\n--- 10. EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST ---');
     let totalClickedCount = 0;
 
     async function closeAnyModal() {
@@ -301,8 +362,8 @@ server.listen(8080, async () => {
     assertTest('Zero Uncaught Errors After All Clicks', pageErrors.length === 0, `Uncaught errors = ${pageErrors.length}`);
 
 
-    // SECTION 9: BASELINE REFERENCE SCREENSHOT GENERATION
-    console.log('\n--- 9. BASELINE REFERENCE SCREENSHOT GENERATION ---');
+    // SECTION 11: BASELINE REFERENCE SCREENSHOT GENERATION
+    console.log('\n--- 11. BASELINE REFERENCE SCREENSHOT GENERATION ---');
     await page.screenshot({ path: 'baseline-reference.png' });
     await page.screenshot({ path: 'test-screenshot.png' });
     console.log(' ✅ PASS: Saved baseline-reference.png');
