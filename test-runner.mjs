@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v3.0.0', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v3.0.1', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -130,7 +130,7 @@ server.listen(8080, async () => {
     // SECTION 4: WEEK SELECTION & NAVIGATION SUITE
     console.log('\n--- 4. WEEK SELECTION & NAVIGATION SUITE ---');
     const initialRange = await page.locator('#planner-date-range').innerText();
-    assertTest('Initial Week Range Display', initialRange.length > 0, `Range = ${initialRange.trim()}`);
+    assertTest('Initial Week Range Display (Local Timezone Current Week)', initialRange.length > 0 && initialRange.includes('今週'), `Range = ${initialRange.trim()}`);
 
     await page.click('#prev-week-btn');
     await page.waitForTimeout(300);
@@ -300,6 +300,43 @@ server.listen(8080, async () => {
     assertTest('Concurrent Realtime Update Reflects Partner Extra Memo', extraRemoteCount > 0);
     assertTest('Remote Sync Keeps Local Selected Week Independent', concurrentResult.selectedWeekUnchanged);
 
+    // Test Legacy 1-day UTC-shifted remote week key auto-alignment & startDayOfWeek sync
+    const legacySyncCheck = await page.evaluate(() => {
+      const currentKey = window.state.selectedWeekStartDate;
+      const parts = currentKey.split('-').map(Number);
+      const shiftedDate = new Date(parts[0], parts[1] - 1, parts[2] - 1);
+      const pad = (n) => String(n).padStart(2, '0');
+      const legacyShiftedKey = `${shiftedDate.getFullYear()}-${pad(shiftedDate.getMonth() + 1)}-${pad(shiftedDate.getDate())}`;
+
+      const legacyPlan = JSON.parse(JSON.stringify(window.state.currentPlan));
+      legacyPlan.startDate = legacyShiftedKey;
+      legacyPlan.days.fri = {
+        dishes: [{ id: 'dish_legacy_shift', title: '旧UTCズレ救済メニュー', rating: 5, memo: '', ingredients: [] }]
+      };
+      window.state.applyRemoteWeeks({ [legacyShiftedKey]: legacyPlan });
+      const friTitle = window.state.currentPlan.days.fri.dishes[0].title;
+
+      // Test startDayOfWeek sync re-aligns selectedWeekStartDate
+      const beforeStartDay = window.state.startDayOfWeek;
+      const beforeSelected = window.state.selectedWeekStartDate;
+      window.state.applyRemoteMeta({ startDayOfWeek: 'sat', stores: window.state.stores });
+      const satDateParts = window.state.selectedWeekStartDate.split('-').map(Number);
+      const satDayNum = new Date(satDateParts[0], satDateParts[1] - 1, satDateParts[2]).getDay();
+
+      // Restore original startDayOfWeek & selectedWeekStartDate
+      window.state.applyRemoteMeta({ startDayOfWeek: beforeStartDay, stores: window.state.stores });
+      window.state.selectedWeekStartDate = beforeSelected;
+      window.state.saveLocal(true);
+      window.renderApp();
+
+      return {
+        friTitle,
+        realignedToSaturday: satDayNum === 6
+      };
+    });
+    assertTest('Legacy UTC-Shifted Remote Week Key Auto-Aligned to Current Week', legacySyncCheck.friTitle === '旧UTCズレ救済メニュー', `Fri Dish = ${legacySyncCheck.friTitle}`);
+    assertTest('Remote startDayOfWeek Change Re-aligns Selected Week Start Day', legacySyncCheck.realignedToSaturday);
+
 
     // SECTION 8: NEW FEATURE & RESTORED BUTTON VERIFICATION SUITE
     console.log('\n--- 8. NEW FEATURE & RESTORED BUTTON VERIFICATION SUITE ---');
@@ -360,8 +397,9 @@ server.listen(8080, async () => {
     const isPlannerTabActiveAfterCopy = await page.locator('#page-planner').isVisible();
     assertTest('Auto Switch to Planner Tab after History Dish Copy', isPlannerTabActiveAfterCopy);
 
-    const wedCopiedDishText = await page.locator('.dinner-card[data-day="wed"] .menu-title').first().innerText();
-    assertTest('History Dish Copy Result on Current Week Wednesday', wedCopiedDishText.includes('醤油ラーメン') || wedCopiedDishText.includes('餃子'), `Wed Dish = ${wedCopiedDishText}`);
+    const wedCopiedDishTexts = await page.locator('.dinner-card[data-day="wed"] .menu-title').allInnerTexts();
+    const wedCopiedCombined = wedCopiedDishTexts.join(' / ');
+    assertTest('History Dish Copy Result on Current Week Wednesday', wedCopiedCombined.includes('醤油ラーメン') && wedCopiedCombined.includes('餃子'), `Wed Dishes = ${wedCopiedCombined}`);
 
 
     // Test 8.5: Date Format Helper

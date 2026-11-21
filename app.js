@@ -37,11 +37,43 @@ const DAY_KEY_TO_JS_DAY = {
 };
 
 function formatDateToISO(d) {
-  if (!(d instanceof Date) || isNaN(d)) return new Date().toISOString().split('T')[0];
-  const year = d.getFullYear();
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
+  const target = (d instanceof Date && !isNaN(d)) ? d : new Date();
+  const year = target.getFullYear();
+  const month = String(target.getMonth() + 1).padStart(2, '0');
+  const day = String(target.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+/**
+ * Fix legacy UTC-shifted week keys (1 day earlier in JST from older toISOString() code)
+ * so existing saved/cloud weeks align seamlessly with the local startDayOfWeek key.
+ */
+function normalizeWeekKey(weekKey, startDayKey = 'mon') {
+  if (!weekKey || typeof weekKey !== 'string') return weekKey;
+  const parsed = parseISODate(weekKey);
+  if (isNaN(parsed)) return weekKey;
+  const targetStartNum = DAY_KEY_TO_JS_DAY[startDayKey] !== undefined ? DAY_KEY_TO_JS_DAY[startDayKey] : 1;
+  if (parsed.getDay() === targetStartNum) {
+    return formatDateToISO(parsed);
+  }
+  const nextDay = new Date(parsed);
+  nextDay.setDate(nextDay.getDate() + 1);
+  if (nextDay.getDay() === targetStartNum) {
+    return formatDateToISO(nextDay);
+  }
+  return formatDateToISO(parsed);
+}
+
+function planHasContent(plan) {
+  if (!plan || !plan.days || typeof plan.days !== 'object') return false;
+  return Object.values(plan.days).some((dayRaw) => {
+    const day = normalizeDayData(dayRaw);
+    return day.dishes.some((dish) =>
+      (dish.title && dish.title.trim() !== '') ||
+      (dish.memo && dish.memo.trim() !== '') ||
+      (Array.isArray(dish.ingredients) && dish.ingredients.length > 0)
+    );
+  });
 }
 
 function parseISODate(isoStr) {
@@ -93,7 +125,7 @@ function sanitizeWeeklyPlan(plan) {
     validPlan = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN));
   }
   if (!validPlan.startDate) {
-    validPlan.startDate = getWeekStartDate(new Date(), (state && state.startDayOfWeek) ? state.startDayOfWeek : 'mon').toISOString().split('T')[0];
+    validPlan.startDate = formatDateToISO(getWeekStartDate(new Date(), (state && state.startDayOfWeek) ? state.startDayOfWeek : 'mon'));
   }
   if (!validPlan.days || typeof validPlan.days !== 'object') {
     validPlan.days = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN.days));
@@ -221,7 +253,7 @@ function getSortedStoresByUsage() {
 // Default Initial Sample Data
 const DEFAULT_WEEKLY_PLAN = {
   id: 'current',
-  startDate: getWeekStartDate(new Date()).toISOString().split('T')[0],
+  startDate: formatDateToISO(getWeekStartDate(new Date())),
   days: {
     mon: {
       dish: '特製ハンバーグ & ガルニ',
@@ -311,15 +343,27 @@ class AppState {
       : DEFAULT_STORES;
     this.startDayOfWeek = localStorage.getItem('week_start_day') || 'mon';
 
-    // Selected week start date (YYYY-MM-DD)
-    const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek).toISOString().split('T')[0];
-    this.selectedWeekStartDate = localStorage.getItem('selected_week_start_date') || todayWeekStart;
+    // Selected week start date (YYYY-MM-DD, local timezone)
+    const todayWeekStart = formatDateToISO(getWeekStartDate(new Date(), this.startDayOfWeek));
+    const savedSelectedWeek = localStorage.getItem('selected_week_start_date');
+    this.selectedWeekStartDate = savedSelectedWeek
+      ? normalizeWeekKey(savedSelectedWeek, this.startDayOfWeek)
+      : todayWeekStart;
 
     this.plansByWeek = {};
     try {
       const savedPlans = JSON.parse(localStorage.getItem('plans_by_week'));
       if (savedPlans && typeof savedPlans === 'object') {
-        this.plansByWeek = savedPlans;
+        Object.keys(savedPlans).forEach((rawKey) => {
+          const normalizedKey = normalizeWeekKey(rawKey, this.startDayOfWeek);
+          const candidate = sanitizeWeeklyPlan({
+            ...savedPlans[rawKey],
+            startDate: normalizedKey
+          });
+          if (!this.plansByWeek[normalizedKey] || (!planHasContent(this.plansByWeek[normalizedKey]) && planHasContent(candidate))) {
+            this.plansByWeek[normalizedKey] = candidate;
+          }
+        });
       }
     } catch (e) {}
 
@@ -327,7 +371,8 @@ class AppState {
     const savedCurrent = JSON.parse(localStorage.getItem('current_plan'));
     if (savedCurrent) {
       const sanitized = sanitizeWeeklyPlan(savedCurrent);
-      const planStart = sanitized.startDate || todayWeekStart;
+      const planStart = normalizeWeekKey(sanitized.startDate || todayWeekStart, this.startDayOfWeek);
+      sanitized.startDate = planStart;
       if (!this.plansByWeek[planStart]) {
         this.plansByWeek[planStart] = sanitized;
       }
@@ -383,7 +428,7 @@ class AppState {
       const newPlan = JSON.parse(JSON.stringify(DEFAULT_WEEKLY_PLAN));
       newPlan.id = 'plan_' + weekStartDateStr;
       newPlan.startDate = weekStartDateStr;
-      const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek).toISOString().split('T')[0];
+      const todayWeekStart = formatDateToISO(getWeekStartDate(new Date(), this.startDayOfWeek));
       if (weekStartDateStr !== todayWeekStart) {
         Object.keys(newPlan.days).forEach(k => {
           newPlan.days[k] = {
@@ -535,7 +580,13 @@ class AppState {
     if (!metaData || typeof metaData !== 'object') return false;
     let changed = false;
     if (typeof metaData.startDayOfWeek === 'string' && metaData.startDayOfWeek) {
-      this.startDayOfWeek = metaData.startDayOfWeek;
+      if (this.startDayOfWeek !== metaData.startDayOfWeek) {
+        this.startDayOfWeek = metaData.startDayOfWeek;
+        // Re-align selected week start date when week start day changes so both devices view the same week key
+        const aligned = getWeekStartDate(parseISODate(this.selectedWeekStartDate), this.startDayOfWeek);
+        this.selectedWeekStartDate = formatDateToISO(aligned);
+        this.ensureWeekPlan(this.selectedWeekStartDate);
+      }
       changed = true;
     }
     if (Array.isArray(metaData.stores) && metaData.stores.length > 0) {
@@ -554,15 +605,23 @@ class AppState {
     const weekKeys = Object.keys(remotePlansByWeek);
     if (weekKeys.length === 0) return false;
 
-    weekKeys.forEach((weekKey) => {
+    // Apply legacy-shifted keys first, then canonical keys so canonical always takes precedence when both exist
+    const orderedKeys = [...weekKeys].sort((a, b) => {
+      const aCanonical = normalizeWeekKey(a, this.startDayOfWeek) === a ? 1 : 0;
+      const bCanonical = normalizeWeekKey(b, this.startDayOfWeek) === b ? 1 : 0;
+      return aCanonical - bCanonical;
+    });
+
+    orderedKeys.forEach((weekKey) => {
       const rawPlan = remotePlansByWeek[weekKey];
       if (!rawPlan || typeof rawPlan !== 'object') return;
+      const normalizedKey = normalizeWeekKey(weekKey, this.startDayOfWeek);
       const sanitized = sanitizeWeeklyPlan({
         ...rawPlan,
-        id: rawPlan.id || `plan_${weekKey}`,
-        startDate: rawPlan.startDate || weekKey
+        id: rawPlan.id || `plan_${normalizedKey}`,
+        startDate: normalizedKey
       });
-      this.plansByWeek[weekKey] = sanitized;
+      this.plansByWeek[normalizedKey] = sanitized;
     });
 
     this.ensureWeekPlan(this.selectedWeekStartDate);
@@ -595,7 +654,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '3.0.0',
+      version: '3.0.1',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -1060,7 +1119,7 @@ function renderStarRatingHtml(rating = 5, dayKey = '', dishId = '') {
 }
 
 function checkIsToday(startDateStr, dayKey) {
-  const start = getWeekStartDate(new Date(startDateStr), state.startDayOfWeek || 'mon');
+  const start = getWeekStartDate(parseISODate(startDateStr), state.startDayOfWeek || 'mon');
   const targetDate = getDayDateInWeek(start, dayKey);
   
   const today = new Date();
@@ -1070,7 +1129,7 @@ function checkIsToday(startDateStr, dayKey) {
 }
 
 function formatDateRange(startDateStr) {
-  const start = getWeekStartDate(new Date(startDateStr), state.startDayOfWeek || 'mon');
+  const start = getWeekStartDate(parseISODate(startDateStr), state.startDayOfWeek || 'mon');
   const end = new Date(start);
   end.setDate(end.getDate() + 6);
 
@@ -1780,6 +1839,9 @@ function setupEventListeners() {
   if (startDaySelect) {
     startDaySelect.addEventListener('change', (e) => {
       state.startDayOfWeek = e.target.value;
+      const aligned = getWeekStartDate(parseISODate(state.selectedWeekStartDate), state.startDayOfWeek);
+      state.selectedWeekStartDate = formatDateToISO(aligned);
+      state.ensureWeekPlan(state.selectedWeekStartDate);
       localStorage.setItem('week_start_day', state.startDayOfWeek);
       state.saveLocal({ scope: 'meta' });
       renderApp();
