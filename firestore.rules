@@ -1,0 +1,30 @@
+rules_version = '2';
+
+// Weekly Dinner Planner - Cloud Firestore セキュリティルール
+// Firebase Console > Firestore Database > ルール に貼り付けて「公開」してください。
+//
+// 【重要】下の2行のメールアドレスを、ご主人・奥様それぞれの Google アカウントに変更してください。
+// ここに登録したアカウント以外は、データの閲覧も書き込みも一切できません。
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAllowedFamilyMember() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'husband-email@gmail.com',
+          'wife-email@gmail.com'
+        ];
+    }
+
+    // ご家族の共有データベース空間
+    match /households/{householdId}/{document=**} {
+      allow read, write: if isAllowedFamilyMember();
+    }
+
+    // 上記以外のパスはすべて拒否
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

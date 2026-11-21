@@ -22,8 +22,6 @@
   
   <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest"></script>
-  <!-- Google Identity Services (GIS) SDK -->
-  <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 
@@ -37,11 +35,11 @@
         </div>
         <div style="display:flex;align-items:center;gap:6px;">
           <span class="brand-title">献立＆買い物ノート ✨</span>
-          <span class="version-badge">v2.5.1</span>
+          <span class="version-badge">v3.0.0</span>
         </div>
       </div>
       <div class="header-actions">
-        <div id="sync-status" class="sync-status-badge" title="Google Drive同期ステータス">
+        <div id="sync-status" class="sync-status-badge" title="Google Cloud 共有DB 同期ステータス">
           <i data-lucide="cloud" style="width:14px;height:14px;"></i>
           <span id="sync-status-text">ローカル保存</span>
         </div>
@@ -56,7 +54,7 @@
       <div id="drive-unsynced-warning" style="display:none;background:#fffbe6;border:1px solid #ffe58f;color:#d48806;padding:10px 16px;border-radius:var(--radius-md);margin-bottom:16px;font-size:0.88rem;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 2px 8px rgba(250,173,20,0.1);">
         <div style="display:flex;align-items:center;gap:8px;">
           <i data-lucide="alert-triangle" style="width:18px;height:18px;color:#faad14;flex-shrink:0;"></i>
-          <span>⚠️ Google Driveと同期されていません。「クラウド設定」からログインしてください。</span>
+          <span id="unsynced-warning-text">⚠️ Google Cloud（共有DB）と未連携です。「クラウド設定」から設定・ログインしてください。</span>
         </div>
         <button id="warning-go-settings-btn" class="btn btn-secondary btn-sm" style="font-size:0.78rem;padding:4px 10px;white-space:nowrap;background:#ffffff;color:#d48806;border-color:#ffe58f;">
           クラウド設定へ
@@ -174,19 +172,19 @@
           </button>
         </div>
         <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
-          奥さんが考えてくれた過去の献立記録です。いつでもGoogle Drive経由でAndroid・iPhone両方から参照・復元できます。
+          過去の献立記録です。Google Cloud 共有データベース経由で、ご夫婦のスマホ・PC両方からいつでもリアルタイムに参照・復元できます。
         </p>
 
         <div id="history-list-container"></div>
       </section>
 
 
-      <!-- PAGE 4: Settings & Google Drive Sync -->
+      <!-- PAGE 4: Settings & Google Cloud Sync -->
       <section id="page-settings" class="page">
         <div class="section-title-row">
           <div class="section-title">
             <i data-lucide="cloud-cog" style="color:var(--accent-emerald);"></i>
-            Google Drive & 設定
+            Google Cloud 共有DB & 設定
           </div>
         </div>
 
@@ -248,36 +246,75 @@
           </form>
         </div>
 
-        <!-- Google Drive Card -->
-        <div class="history-card" style="margin-bottom:20px;">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
-            <i data-lucide="cloud" style="width:24px;height:24px;color:#10b981;"></i>
-            <h3 style="font-size:1.05rem;font-weight:700;">Google Drive クラウド同期</h3>
+        <!-- Google Cloud (Cloud Firestore) Real-time Shared DB Card -->
+        <div class="history-card" style="margin-bottom:20px;border-color:#10b981;">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:10px;">
+              <i data-lucide="database" style="width:24px;height:24px;color:#10b981;"></i>
+              <h3 style="font-size:1.05rem;font-weight:700;">Google Cloud 共有データベース（リアルタイム同期）</h3>
+            </div>
+            <span id="cloud-connection-pill" style="font-size:0.75rem;font-weight:700;padding:3px 10px;border-radius:9999px;background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;">未接続</span>
           </div>
-          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
-            Googleアカウントで連携することで、ご自身のGoogle Drive内に専用ファイルが作成され、複数端末（iPhone / Android / PC）間で献立・食材・店舗タグ・過去履歴が自動同期されます。
+          <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px;">
+            Google Cloud（Cloud Firestore）と Google ログインを使って、ご夫婦それぞれ別の Google アカウントから同じ共有データベースへ同時に参照・編集できます。変更は数秒以内に相手の端末へ自動反映されます。
           </p>
 
+          <!-- Current Auth / Sync Info Box -->
+          <div id="cloud-auth-info" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:var(--radius-md);padding:12px 14px;margin-bottom:14px;font-size:0.83rem;color:#334155;">
+            <div><strong>ログイン状態:</strong> <span id="cloud-user-display">未ログイン</span></div>
+            <div style="margin-top:4px;"><strong>接続先プロジェクト:</strong> <span id="cloud-project-display">未設定</span> / <strong>家族共有ID:</strong> <span id="cloud-household-display">family-main</span></div>
+          </div>
+
           <div class="form-group">
-            <label class="form-label">Google Cloud Client ID</label>
-            <input type="text" id="gdrive-client-id-input" class="form-input" placeholder="例: 1234567890-xxx.apps.googleusercontent.com">
+            <label class="form-label" for="cloud-household-id-input">家族共有 ID（ご夫婦で同じIDを指定）</label>
+            <input type="text" id="cloud-household-id-input" class="form-input" placeholder="例: family-main" value="family-main">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="cloud-firebase-config-input">Firebase / Google Cloud 設定（firebaseConfig をそのまま貼り付け可）</label>
+            <textarea id="cloud-firebase-config-input" class="form-textarea" rows="5" placeholder='例:&#10;const firebaseConfig = {&#10;  apiKey: "...",&#10;  authDomain: "your-project.firebaseapp.com",&#10;  projectId: "your-project",&#10;  appId: "..."&#10;};' style="font-family:Consolas, monospace;font-size:0.78rem;"></textarea>
           </div>
 
           <div style="display:flex;flex-direction:column;gap:10px;">
-            <button id="gdrive-connect-btn" class="btn btn-primary" style="width:100%;background:linear-gradient(135deg, #10b981 0%, #059669 100%);">
-              <i data-lucide="key-round" style="width:16px;height:16px;"></i>
-              Googleアカウントでログイン認証
-            </button>
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button id="cloud-save-config-btn" type="button" class="btn btn-secondary" style="flex:1;border-color:#0284c7;color:#0369a1;">
+                <i data-lucide="save" style="width:16px;height:16px;"></i> 設定を保存
+              </button>
+              <button id="cloud-copy-share-config-btn" type="button" class="btn btn-secondary" style="flex:1;border-color:#818cf8;color:#4f46e5;">
+                <i data-lucide="share-2" style="width:16px;height:16px;"></i> 設定をコピー（パートナー端末用）
+              </button>
+            </div>
 
             <div style="display:flex;gap:10px;flex-wrap:wrap;">
-              <button id="gdrive-save-manual-btn" class="btn btn-secondary" style="flex:1;border-color:#10b981;color:#059669;">
-                <i data-lucide="cloud-upload" style="width:16px;height:16px;"></i> 今すぐDriveへ保存
+              <button id="cloud-login-btn" type="button" class="btn btn-primary" style="flex:2;background:linear-gradient(135deg, #10b981 0%, #059669 100%);">
+                <i data-lucide="log-in" style="width:16px;height:16px;"></i>
+                Googleアカウントでログイン
               </button>
-              <button id="gdrive-load-manual-btn" class="btn btn-secondary" style="flex:1;border-color:#818cf8;color:#4f46e5;">
-                <i data-lucide="cloud-download" style="width:16px;height:16px;"></i> Driveから復元(取得)
+              <button id="cloud-logout-btn" type="button" class="btn btn-secondary" style="flex:1;display:none;color:#f43f5e;border-color:rgba(244,63,94,0.35);">
+                <i data-lucide="log-out" style="width:16px;height:16px;"></i>
+                ログアウト
+              </button>
+            </div>
+
+            <div style="display:flex;gap:10px;flex-wrap:wrap;">
+              <button id="cloud-upload-all-btn" type="button" class="btn btn-secondary" style="flex:1;border-color:#10b981;color:#059669;">
+                <i data-lucide="cloud-upload" style="width:16px;height:16px;"></i> ローカルデータを一括送信（初回移行）
+              </button>
+              <button id="cloud-reload-btn" type="button" class="btn btn-secondary" style="flex:1;border-color:#818cf8;color:#4f46e5;">
+                <i data-lucide="refresh-cw" style="width:16px;height:16px;"></i> クラウドから最新を再取得
               </button>
             </div>
           </div>
+
+          <details style="margin-top:14px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:var(--radius-md);padding:10px 14px;font-size:0.8rem;color:#166534;">
+            <summary style="cursor:pointer;font-weight:700;">はじめてのセットアップ手順（概要）</summary>
+            <ol style="margin-top:8px;padding-left:18px;line-height:1.7;">
+              <li>Firebase コンソールでプロジェクトと Cloud Firestore を作成し、Authentication で Google ログインを有効化します。</li>
+              <li>リポジトリ内の <code>firestore.rules</code> にご夫婦2人のメールアドレスを設定して公開します。</li>
+              <li>ウェブアプリの <code>firebaseConfig</code> を上の欄に貼り付けて「設定を保存」→「Googleアカウントでログイン」を押します。</li>
+              <li>2人目の端末には「設定をコピー（パートナー端末用）」を送り、貼り付けて自分の Google アカウントでログインするだけです（詳細は <code>CLOUD_SETUP.md</code> 参照）。</li>
+            </ol>
+          </details>
         </div>
 
         <!-- Debug Mode & Inspection Card -->
@@ -285,7 +322,7 @@
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
             <div style="display:flex;align-items:center;gap:10px;">
               <i data-lucide="bug" style="width:24px;height:24px;color:#6c5ce7;"></i>
-              <h3 style="font-size:1.05rem;font-weight:700;">デバッグモード (Google Driveデータ検証)</h3>
+              <h3 style="font-size:1.05rem;font-weight:700;">デバッグモード (Cloud Firestore データ検証)</h3>
             </div>
             <label class="toggle-switch" style="display:inline-flex;align-items:center;gap:8px;cursor:pointer;">
               <input type="checkbox" id="debug-mode-toggle" style="width:18px;height:18px;cursor:pointer;">
@@ -293,7 +330,7 @@
             </label>
           </div>
           <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px;">
-            デバッグモードをONにすると、Google Drive上の `WeeklyDinnerPlanner_Data.json` の生のJSONデータを直接取得・表示・確認・適用できます。
+            デバッグモードをONにすると、Google Cloud（Cloud Firestore）上の共有データベース内容を生のJSON形式で取得・確認・適用できます。
           </p>
 
           <div id="debug-panel" style="display:none;background:#fff0f3;border:1px solid #fecdd3;border-radius:var(--radius-md);padding:14px;">
@@ -312,7 +349,7 @@
               </div>
             </div>
 
-            <pre id="debug-json-container" style="background:#2d2424;color:#ff9ebb;padding:14px;border-radius:var(--radius-sm);font-family:Consolas, monospace;font-size:0.78rem;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-all;">Google Driveからデータを取得中...</pre>
+            <pre id="debug-json-container" style="background:#2d2424;color:#ff9ebb;padding:14px;border-radius:var(--radius-sm);font-family:Consolas, monospace;font-size:0.78rem;max-height:340px;overflow:auto;white-space:pre-wrap;word-break:break-all;">Cloud Firestoreからデータを取得中...</pre>
           </div>
         </div>
 
@@ -323,7 +360,7 @@
             <h3 style="font-size:1.05rem;font-weight:700;">ファイル直接エクスポート/復元</h3>
           </div>
           <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:16px;">
-            Google Drive連携を使用せずに、献立バックアップファイル(JSON)を手動で保存・読み込むことも可能です。
+            クラウド連携を使用せずに、献立バックアップファイル(JSON)を手動で保存・読み込むことも可能です（旧 Google Drive バックアップからの移行にも使えます）。
           </p>
 
           <div style="display:flex;gap:10px;flex-wrap:wrap;">

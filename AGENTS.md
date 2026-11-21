@@ -6,12 +6,12 @@
 
 ## 1. プロジェクト概要・技術スタック
 
-1週間の夕食献立とスーパー別買い物リストを管理し、Google Drive 経由で夫婦間（iPhone / Android 等）でデータ同期できる PWA（Progressive Web App）です。
+1週間の夕食献立とスーパー別買い物リストを管理し、Google Cloud（Cloud Firestore）経由で夫婦間（iPhone / Android / PC）でリアルタイム同時同期できる PWA（Progressive Web App）です。
 
 - **フロントエンド**: Vanilla HTML / CSS / JavaScript（ES Modules）
 - **ビルドツール**: なし（静的ファイルのまま動作させる。不要なフレームワークやビルド工程を勝手に導入しない）
-- **外部ライブラリ（CDN）**: Lucide Icons、Google Identity Services（GIS）SDK
-- **データ保存**: `localStorage`（メイン）＋ Google Drive API v3（任意同期）
+- **外部ライブラリ（CDN）**: Lucide Icons、Firebase Web SDK（ES Modules 動的読み込み：Auth + Cloud Firestore）
+- **データ保存**: `localStorage`（ローカルキャッシュ）＋ Google Cloud Cloud Firestore（夫婦共有リアルタイム DB）
 - **テスト**: Playwright（`test-runner.mjs` による E2E リグレッションテスト）
 
 ---
@@ -21,8 +21,10 @@
 | ファイル | 役割 |
 | :--- | :--- |
 | `index.html` | UI 構造、モーダル定義、4タブ構成（`#page-planner`, `#page-shopping`, `#page-history`, `#page-settings`）、バージョン表示 |
-| `app.js` | アプリ本体の状態管理（`AppState`）、各画面描画、イベント処理、モーダル制御 |
-| `googleDrive.js` | Google OAuth（GIS）認証および Google Drive API v3 による JSON 保存・読込（`GoogleDriveSync`） |
+| `app.js` | アプリ本体の状態管理（`AppState`）、各画面描画、イベント処理、モーダル制御、リアルタイム同期統合 |
+| `cloudDb.js` | Firebase Auth（Google ログイン）および Cloud Firestore による夫婦同時リアルタイム同期・差分更新（`CloudDatabaseSync`） |
+| `firestore.rules` | ご夫婦2名の Google アカウントのみ許可する Firestore セキュリティルール定義テンプレート |
+| `CLOUD_SETUP.md` | Google Cloud / Firebase プロジェクト作成・セキュリティルール設定・夫婦端末接続のセットアップ手順書 |
 | `styles.css` | レスポンシブ・モバイル向けスタイル定義 |
 | `sw.js` | PWA Service Worker（Network-first 戦略、キャッシュ管理） |
 | `manifest.json` | PWA マニフェスト（アイコン、テーマカラー等） |
@@ -66,7 +68,7 @@ npm test
 
 ## 5. バージョン更新プロトコル
 
-機能追加やバグ修正に伴いバージョンを上げる場合、以下の **4箇所すべてを必ず同じバージョンに同期更新** すること（現在: `2.5.1`）。
+機能追加やバグ修正に伴いバージョンを上げる場合、以下の **4箇所すべてを必ず同じバージョンに同期更新** すること（現在: `3.0.0`）。
 
 1. `index.html` — ヘッダーの `<span class="version-badge">vX.Y.Z</span>`
 2. `sw.js` — `const CACHE_NAME = 'weekly-dinner-vX.Y.Z';`（PWA キャッシュ更新のため必須）
@@ -91,6 +93,7 @@ npm test
 ### テスト用グローバル公開の維持
 - `test-runner.mjs` やブラウザからのデバッグが依存しているため、`app.js` で `window` に公開しているオブジェクト・関数を無断で削除・リネームしないこと：
   - `window.state`
+  - `window.cloudDb`
   - `window.renderApp`
   - `window.updateSyncStatusUI`
   - `window.formatBackupDisplayName`

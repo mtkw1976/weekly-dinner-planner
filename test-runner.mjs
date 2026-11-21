@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.5.1', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v3.0.0', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -188,20 +188,117 @@ server.listen(8080, async () => {
     await page.waitForTimeout(300);
 
 
-    // SECTION 7: GOOGLE DRIVE SYNC STATUS BADGE UI
-    console.log('\n--- 7. GOOGLE DRIVE SYNC STATUS BADGE UI ---');
-    await page.evaluate(() => window.updateSyncStatusUI('syncing', 'Drive同期中...'));
+    // SECTION 7: GOOGLE CLOUD SYNC STATUS BADGE UI & SHARED DB SUITE
+    console.log('\n--- 7. GOOGLE CLOUD SYNC STATUS BADGE UI & SHARED DB SUITE ---');
+    await page.evaluate(() => window.updateSyncStatusUI('syncing', 'クラウド同期中...'));
     await page.waitForTimeout(150);
     const syncingText = await page.locator('#sync-status-text').innerText();
-    assertTest('Sync Status UI (Syncing)', syncingText === 'Drive同期中...');
+    assertTest('Sync Status UI (Syncing)', syncingText === 'クラウド同期中...');
 
-    await page.evaluate(() => window.updateSyncStatusUI('synced', 'Drive同期済み'));
+    await page.evaluate(() => window.updateSyncStatusUI('realtime', 'クラウド同期中'));
     await page.waitForTimeout(150);
     const syncedText = await page.locator('#sync-status-text').innerText();
-    assertTest('Sync Status UI (Synced)', syncedText === 'Drive同期済み');
+    assertTest('Sync Status UI (Realtime Synced)', syncedText === 'クラウド同期中');
 
     await page.evaluate(() => window.updateSyncStatusUI('offline', 'ローカル保存'));
     await page.waitForTimeout(150);
+
+    // Cloud Firestore Settings UI & Config Parsing Verification
+    await page.click('[data-tab="settings"]');
+    await page.waitForTimeout(200);
+    const hasCloudInputs =
+      (await page.locator('#cloud-household-id-input').isVisible()) &&
+      (await page.locator('#cloud-firebase-config-input').isVisible()) &&
+      (await page.locator('#cloud-save-config-btn').isVisible()) &&
+      (await page.locator('#cloud-login-btn').isVisible()) &&
+      (await page.locator('#cloud-copy-share-config-btn').isVisible());
+    assertTest('Cloud Firestore Settings UI Elements Present', hasCloudInputs);
+
+    // Test parsing Firebase Console JS snippet & saving to localStorage
+    const sampleFirebaseSnippet = `
+      const firebaseConfig = {
+        apiKey: "AIzaSyTestExampleKey12345",
+        authDomain: "family-dinner-test.firebaseapp.com",
+        projectId: "family-dinner-test",
+        appId: "1:1234567890:web:abcdef123456"
+      };
+    `;
+    await page.fill('#cloud-household-id-input', 'tanaka-family');
+    await page.fill('#cloud-firebase-config-input', sampleFirebaseSnippet);
+    await page.click('#cloud-save-config-btn');
+    await page.waitForTimeout(200);
+
+    const cloudConfigCheck = await page.evaluate(() => {
+      const cfg = window.cloudDb.getConfig();
+      const hid = window.cloudDb.getHouseholdId();
+      const shareStr = window.cloudDb.exportShareConfig();
+      const reparsed = window.cloudDb.importShareConfig(shareStr);
+      return {
+        projectId: cfg && cfg.projectId,
+        householdId: hid,
+        roundTripOk: reparsed && reparsed.householdId === 'tanaka-family' && reparsed.firebaseConfig.projectId === 'family-dinner-test'
+      };
+    });
+    assertTest(
+      'Cloud Config JS Snippet Parse & Save',
+      cloudConfigCheck.projectId === 'family-dinner-test' && cloudConfigCheck.householdId === 'tanaka-family',
+      `Project=${cloudConfigCheck.projectId}, Household=${cloudConfigCheck.householdId}`
+    );
+    assertTest('Partner Share Config Export/Import Round-Trip', cloudConfigCheck.roundTripOk);
+
+    // Clear test cloud config so startup warning banner & subsequent tests run cleanly
+    await page.evaluate(() => {
+      localStorage.removeItem('cloud_firebase_config');
+      localStorage.removeItem('cloud_household_id');
+      window.cloudDb.config = null;
+      window.cloudDb.householdId = 'family-main';
+    });
+
+    // Test Concurrent Real-time Update Simulation (Wife updates Thu while Husband is editing Mon modal)
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
+    await page.click('.dinner-card[data-day="mon"] .add-dish-btn');
+    await page.waitForTimeout(200);
+    await page.fill('#edit-day-modal .dish-title-input', '夫が編集中のメニュー');
+
+    const concurrentResult = await page.evaluate(() => {
+      const currentWeek = window.state.selectedWeekStartDate;
+      const thuPlan = JSON.parse(JSON.stringify(window.state.currentPlan));
+      thuPlan.days.thu = {
+        dishes: [{ id: 'dish_wife_remote', title: '妻がリアルタイム追加した唐揚げ', rating: 5, memo: '同時編集テスト', ingredients: [] }]
+      };
+      // Simulate incoming Firestore onSnapshot update for weeks & extraItems
+      window.state.applyRemoteWeeks({ [currentWeek]: thuPlan });
+      window.state.applyRemoteExtraItems([
+        ...window.state.extraShoppingItems,
+        { id: 'extra_wife_remote', name: '妻が追加した牛乳', storeId: 'aeon', checked: false, order: 99 }
+      ]);
+      // Ensure selected week stays independent even after meta update
+      window.state.applyRemoteMeta({ startDayOfWeek: window.state.startDayOfWeek, stores: window.state.stores });
+      return {
+        selectedWeekUnchanged: window.state.selectedWeekStartDate === currentWeek,
+        editingTitlePreserved: window.state.editingDayData && window.state.editingDayData.dishes[0].title === '夫が編集中のメニュー'
+      };
+    });
+    await page.waitForTimeout(200);
+    const modalInputValAfterRemote = await page.locator('#edit-day-modal .dish-title-input').inputValue();
+    await page.click('#close-modal-btn');
+    await page.waitForTimeout(200);
+
+    const thuRemoteText = await page.locator('.dinner-card[data-day="thu"] .menu-title').first().innerText();
+    const extraRemoteCount = await page.locator('#extra-items-list-container:has-text("妻が追加した牛乳")').count();
+    assertTest(
+      'Concurrent Realtime Update Reflects Partner Day Edit (Thursday)',
+      thuRemoteText === '妻がリアルタイム追加した唐揚げ',
+      `Thu Dish = ${thuRemoteText}`
+    );
+    assertTest(
+      'Concurrent Realtime Update Preserves Active Modal Input Buffer',
+      concurrentResult.editingTitlePreserved && modalInputValAfterRemote === '夫が編集中のメニュー',
+      `Modal Input = ${modalInputValAfterRemote}`
+    );
+    assertTest('Concurrent Realtime Update Reflects Partner Extra Memo', extraRemoteCount > 0);
+    assertTest('Remote Sync Keeps Local Selected Week Independent', concurrentResult.selectedWeekUnchanged);
 
 
     // SECTION 8: NEW FEATURE & RESTORED BUTTON VERIFICATION SUITE
@@ -414,7 +511,7 @@ server.listen(8080, async () => {
     await page.waitForTimeout(200);
     await clickAllMatching('Restore Default Stores Button', '#restore-default-stores-btn');
     await clickAllMatching('Delete Store Tag Buttons', '.delete-store-btn');
-    await clickAllMatching('Google Drive Action Buttons', '#drive-login-btn, #drive-logout-btn, #manual-sync-btn');
+    await clickAllMatching('Google Cloud Action Buttons', '#cloud-copy-share-config-btn, #cloud-upload-all-btn, #cloud-reload-btn');
     await clickAllMatching('Export & Import Data Buttons', '#export-json-btn, #import-json-btn');
 
     await clickAllMatching('Bottom Navigation Bar Tabs', '.nav-item');

@@ -2,7 +2,7 @@
  * Weekly Dinner & Grocery Planner - Main Application Core Logic
  */
 
-import { driveSync } from './googleDrive.js';
+import { cloudDb } from './cloudDb.js';
 
 // Default Stores Configuration
 const DEFAULT_STORES = [
@@ -410,7 +410,7 @@ class AppState {
     const newStart = getWeekStartDate(current, this.startDayOfWeek);
     this.selectedWeekStartDate = formatDateToISO(newStart);
     this.ensureWeekPlan(this.selectedWeekStartDate);
-    this.saveLocal();
+    this.saveLocal(true);
     renderApp();
   }
 
@@ -420,7 +420,7 @@ class AppState {
     const newStart = getWeekStartDate(targetDate, this.startDayOfWeek);
     this.selectedWeekStartDate = formatDateToISO(newStart);
     this.ensureWeekPlan(this.selectedWeekStartDate);
-    this.saveLocal();
+    this.saveLocal(true);
     renderApp();
   }
 
@@ -428,11 +428,11 @@ class AppState {
     const todayWeekStart = getWeekStartDate(new Date(), this.startDayOfWeek);
     this.selectedWeekStartDate = formatDateToISO(todayWeekStart);
     this.ensureWeekPlan(this.selectedWeekStartDate);
-    this.saveLocal();
+    this.saveLocal(true);
     renderApp();
   }
 
-  saveLocal(skipDriveSync = false) {
+  saveLocal(options = false) {
     localStorage.setItem('stores', JSON.stringify(this.stores));
     localStorage.setItem('selected_week_start_date', this.selectedWeekStartDate);
     localStorage.setItem('plans_by_week', JSON.stringify(this.plansByWeek));
@@ -440,27 +440,162 @@ class AppState {
     localStorage.setItem('history_plans', JSON.stringify(this.history));
     localStorage.setItem('extra_shopping_items', JSON.stringify(this.extraShoppingItems));
     localStorage.setItem('week_start_day', this.startDayOfWeek);
-    if (driveSync.accessToken && !skipDriveSync) {
-      updateSyncStatusUI('syncing', 'Drive同期中...');
-      driveSync.saveToDrive(this.exportAllData())
-        .then(() => {
-          updateSyncStatusUI('synced', 'Drive同期済み');
-        })
-        .catch(err => {
-          console.error('Auto Drive sync info:', err.message);
-          if (err.message && err.message.includes('認証期限')) {
-            updateSyncStatusUI('expired', 'Drive要再認証');
-            showToast('Google Driveの認証期限が切れました。「クラウド設定」から再ログインしてください。');
-          } else {
-            updateSyncStatusUI('offline', 'ローカル保存');
-          }
-        });
+
+    const skipCloudSync = options === true || (options && options.skipCloudSync === true);
+    if (skipCloudSync || !cloudDb.isSignedIn()) {
+      return;
     }
+
+    const syncOpt = (options && typeof options === 'object') ? options : { scope: 'weekFull', weekStartDate: this.selectedWeekStartDate };
+    this._syncToCloud(syncOpt);
+  }
+
+  _syncToCloud(syncOpt) {
+    if (!cloudDb.isSignedIn()) return;
+
+    updateSyncStatusUI('syncing', 'クラウド同期中...');
+
+    let promise;
+    const scope = syncOpt.scope || 'all';
+    const targetWeek = syncOpt.weekStartDate || this.selectedWeekStartDate;
+
+    try {
+      if (scope === 'meta') {
+        promise = cloudDb.saveMetaConfig({
+          startDayOfWeek: this.startDayOfWeek,
+          stores: this.stores
+        });
+      } else if (scope === 'weekDay' && syncOpt.dayKey) {
+        const plan = this.ensureWeekPlan(targetWeek);
+        const dayData = normalizeDayData(plan.days[syncOpt.dayKey]);
+        promise = cloudDb.saveWeekDays(targetWeek, { [syncOpt.dayKey]: dayData });
+      } else if (scope === 'weekDays' && Array.isArray(syncOpt.dayKeys) && syncOpt.dayKeys.length > 0) {
+        const plan = this.ensureWeekPlan(targetWeek);
+        const daysMap = {};
+        syncOpt.dayKeys.forEach((dk) => {
+          daysMap[dk] = normalizeDayData(plan.days[dk]);
+        });
+        promise = cloudDb.saveWeekDays(targetWeek, daysMap);
+      } else if (scope === 'weekFull') {
+        const plan = this.ensureWeekPlan(targetWeek);
+        promise = cloudDb.saveFullWeek(targetWeek, plan);
+      } else if (scope === 'extraUpsert' && syncOpt.item) {
+        promise = cloudDb.upsertExtraItem(syncOpt.item);
+      } else if (scope === 'extraDelete' && syncOpt.itemId) {
+        promise = cloudDb.deleteExtraItem(syncOpt.itemId);
+      } else if (scope === 'extraClear') {
+        promise = cloudDb.clearAllExtraItems();
+      } else if (scope === 'reorder') {
+        const tasks = [];
+        if (Array.isArray(syncOpt.dayKeys) && syncOpt.dayKeys.length > 0) {
+          const plan = this.ensureWeekPlan(targetWeek);
+          const daysMap = {};
+          syncOpt.dayKeys.forEach((dk) => {
+            daysMap[dk] = normalizeDayData(plan.days[dk]);
+          });
+          tasks.push(cloudDb.saveWeekDays(targetWeek, daysMap));
+        }
+        if (Array.isArray(syncOpt.extraItems) && syncOpt.extraItems.length > 0) {
+          tasks.push(cloudDb.upsertExtraItemsBatch(syncOpt.extraItems));
+        }
+        promise = Promise.all(tasks);
+      } else if (scope === 'historyUpsert' && syncOpt.hist) {
+        promise = cloudDb.upsertHistoryItem(syncOpt.hist);
+      } else if (scope === 'historyDelete' && syncOpt.histId) {
+        promise = cloudDb.deleteHistoryItem(syncOpt.histId);
+      } else {
+        promise = cloudDb.uploadAllLocalData(this.exportAllData());
+      }
+    } catch (err) {
+      promise = Promise.reject(err);
+    }
+
+    Promise.resolve(promise)
+      .then(() => {
+        updateSyncStatusUI('realtime', 'クラウド同期中');
+        updateCloudSettingsStatusUI();
+      })
+      .catch((err) => {
+        console.error('Cloud Firestore sync error:', err);
+        const formatted = cloudDb.formatFirestoreError(err);
+        if (err && err.code === 'permission-denied') {
+          updateSyncStatusUI('error', '権限エラー');
+          showToast(formatted.message);
+        } else if (!navigator.onLine || (err && err.code === 'unavailable')) {
+          updateSyncStatusUI('offline', 'オフライン待機');
+        } else {
+          updateSyncStatusUI('error', '同期エラー');
+          showToast(`クラウド同期エラー: ${formatted.message}`);
+        }
+        updateCloudSettingsStatusUI();
+      });
+  }
+
+  applyRemoteMeta(metaData) {
+    if (!metaData || typeof metaData !== 'object') return false;
+    let changed = false;
+    if (typeof metaData.startDayOfWeek === 'string' && metaData.startDayOfWeek) {
+      this.startDayOfWeek = metaData.startDayOfWeek;
+      changed = true;
+    }
+    if (Array.isArray(metaData.stores) && metaData.stores.length > 0) {
+      this.stores = metaData.stores;
+      changed = true;
+    }
+    if (changed) {
+      this.saveLocal(true);
+      renderApp();
+    }
+    return changed;
+  }
+
+  applyRemoteWeeks(remotePlansByWeek) {
+    if (!remotePlansByWeek || typeof remotePlansByWeek !== 'object') return false;
+    const weekKeys = Object.keys(remotePlansByWeek);
+    if (weekKeys.length === 0) return false;
+
+    weekKeys.forEach((weekKey) => {
+      const rawPlan = remotePlansByWeek[weekKey];
+      if (!rawPlan || typeof rawPlan !== 'object') return;
+      const sanitized = sanitizeWeeklyPlan({
+        ...rawPlan,
+        id: rawPlan.id || `plan_${weekKey}`,
+        startDate: rawPlan.startDate || weekKey
+      });
+      this.plansByWeek[weekKey] = sanitized;
+    });
+
+    this.ensureWeekPlan(this.selectedWeekStartDate);
+    this.saveLocal(true);
+    renderApp();
+    return true;
+  }
+
+  applyRemoteExtraItems(items) {
+    if (!Array.isArray(items)) return false;
+    this.extraShoppingItems = items.map((item, idx) => ({
+      id: item.id || `extra_remote_${idx}`,
+      name: typeof item.name === 'string' ? item.name : '',
+      storeId: typeof item.storeId === 'string' ? item.storeId : 'other',
+      checked: Boolean(item.checked),
+      order: typeof item.order === 'number' ? item.order : idx * 10
+    }));
+    this.saveLocal(true);
+    renderApp();
+    return true;
+  }
+
+  applyRemoteHistory(historyList) {
+    if (!Array.isArray(historyList)) return false;
+    this.history = historyList.filter((h) => h && typeof h === 'object');
+    this.saveLocal(true);
+    renderApp();
+    return true;
   }
 
   exportAllData() {
     return {
-      version: '2.5.1',
+      version: '3.0.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -472,7 +607,7 @@ class AppState {
     };
   }
 
-  importAllData(data, skipDriveSync = false) {
+  importAllData(data, skipCloudSync = false) {
     if (!data) return false;
     if (data.startDayOfWeek) this.startDayOfWeek = data.startDayOfWeek;
     if (data.selectedWeekStartDate) this.selectedWeekStartDate = data.selectedWeekStartDate;
@@ -491,13 +626,14 @@ class AppState {
     if (data.extraShoppingItems && Array.isArray(data.extraShoppingItems)) {
       this.extraShoppingItems = data.extraShoppingItems;
     }
-    this.saveLocal(skipDriveSync);
+    this.saveLocal(skipCloudSync ? true : { scope: 'all' });
     return true;
   }
 }
 
 const state = new AppState();
 window.state = state;
+window.cloudDb = cloudDb;
 
 export function formatBackupDisplayName(filename) {
   if (!filename || typeof filename !== 'string') return 'バックアップデータ';
@@ -524,13 +660,155 @@ async function initApp() {
     warningGoBtn.addEventListener('click', () => switchTab('settings'));
   }
 
-  if (driveSync.accessToken) {
-    updateSyncStatusUI('synced', 'Drive同期済み');
-    if (warningBanner) warningBanner.style.display = 'none';
+  window.addEventListener('online', () => {
+    if (cloudDb.isSignedIn() && cloudDb.isSubscribed) {
+      updateSyncStatusUI('realtime', 'クラウド同期中');
+    }
+  });
+  window.addEventListener('offline', () => {
+    if (cloudDb.isSignedIn()) {
+      updateSyncStatusUI('offline', 'オフライン待機');
+    }
+  });
+
+  if (cloudDb.isConfigured()) {
+    updateSyncStatusUI('syncing', 'クラウド接続中...');
+    try {
+      await cloudDb.init(handleCloudAuthStateChange);
+    } catch (err) {
+      console.warn('Cloud DB init skipped/failed:', err.message);
+      updateSyncStatusUI('offline', 'ローカル保存');
+      if (warningBanner) warningBanner.style.display = 'flex';
+    }
   } else {
     updateSyncStatusUI('offline', 'ローカル保存');
     if (warningBanner) warningBanner.style.display = 'flex';
-    showToast('⚠️ Google Driveと同期されていません。「クラウド設定」からログインしてください。');
+    showToast('⚠️ Google Cloud（共有DB）と未連携です。「クラウド設定」から設定・ログインしてください。');
+  }
+  updateCloudSettingsStatusUI();
+}
+
+async function handleCloudAuthStateChange(user) {
+  const warningBanner = document.getElementById('drive-unsynced-warning');
+  if (user) {
+    if (warningBanner) warningBanner.style.display = 'none';
+    updateCloudSettingsStatusUI();
+    await startRealtimeCloudSync({ promptInitialUpload: false });
+  } else {
+    cloudDb.stopRealtimeSync();
+    updateSyncStatusUI('offline', 'ローカル保存');
+    if (warningBanner) warningBanner.style.display = 'flex';
+    updateCloudSettingsStatusUI();
+  }
+}
+
+async function startRealtimeCloudSync({ promptInitialUpload = false } = {}) {
+  if (!cloudDb.isSignedIn()) return;
+
+  try {
+    updateSyncStatusUI('syncing', 'クラウド同期中...');
+
+    const hasRemote = await cloudDb.hasRemoteData();
+    if (!hasRemote && promptInitialUpload) {
+      if (confirm('Google Cloud 共有データベースはまだ空です。現在のローカルデータをクラウドへ初回アップロードしますか？')) {
+        await cloudDb.uploadAllLocalData(state.exportAllData());
+        showToast('ローカルデータを Google Cloud 共有DB へ移行しました！✨');
+      }
+    }
+
+    let isInitialSyncToastShown = false;
+    cloudDb.startRealtimeSync({
+      onMetaUpdate: (metaData) => {
+        state.applyRemoteMeta(metaData);
+        updateSyncStatusUI('realtime', 'クラウド同期中');
+        updateCloudSettingsStatusUI();
+      },
+      onWeeksUpdate: (plansByWeek, meta) => {
+        if (!meta.empty) {
+          state.applyRemoteWeeks(plansByWeek);
+        }
+        updateSyncStatusUI(meta.fromCache && !navigator.onLine ? 'offline' : 'realtime', meta.fromCache && !navigator.onLine ? 'オフライン待機' : 'クラウド同期中');
+        updateCloudSettingsStatusUI();
+        if (!isInitialSyncToastShown && !meta.empty && !meta.hasPendingWrites) {
+          isInitialSyncToastShown = true;
+        }
+      },
+      onExtraItemsUpdate: (items, meta) => {
+        if (!meta.empty || state.extraShoppingItems.length > 0) {
+          state.applyRemoteExtraItems(items);
+        }
+        updateCloudSettingsStatusUI();
+      },
+      onHistoryUpdate: (historyList, meta) => {
+        if (!meta.empty || state.history.length > 0) {
+          state.applyRemoteHistory(historyList);
+        }
+        updateCloudSettingsStatusUI();
+      },
+      onError: (formattedErr, rawErr) => {
+        console.error('Realtime sync error:', rawErr);
+        if (rawErr && rawErr.code === 'permission-denied') {
+          updateSyncStatusUI('error', '権限エラー');
+        } else {
+          updateSyncStatusUI('error', '同期エラー');
+        }
+        showToast(formattedErr.message);
+        updateCloudSettingsStatusUI();
+      }
+    });
+
+    updateSyncStatusUI('realtime', 'クラウド同期中');
+    updateCloudSettingsStatusUI();
+  } catch (err) {
+    console.error('Failed to start realtime sync:', err);
+    const formatted = cloudDb.formatFirestoreError(err);
+    updateSyncStatusUI('error', err && err.code === 'permission-denied' ? '権限エラー' : '同期エラー');
+    showToast(formatted.message);
+    updateCloudSettingsStatusUI();
+  }
+}
+
+function updateCloudSettingsStatusUI() {
+  const pill = document.getElementById('cloud-connection-pill');
+  const userEl = document.getElementById('cloud-user-display');
+  const projectEl = document.getElementById('cloud-project-display');
+  const householdEl = document.getElementById('cloud-household-display');
+  const loginBtn = document.getElementById('cloud-login-btn');
+  const logoutBtn = document.getElementById('cloud-logout-btn');
+
+  const cfg = cloudDb.getConfig();
+  const user = cloudDb.getCurrentUser();
+
+  if (projectEl) projectEl.innerText = cfg && cfg.projectId ? cfg.projectId : '未設定';
+  if (householdEl) householdEl.innerText = cloudDb.getHouseholdId();
+
+  if (user) {
+    if (userEl) userEl.innerText = `${user.displayName} (${user.email})`;
+    if (loginBtn) loginBtn.style.display = 'none';
+    if (logoutBtn) logoutBtn.style.display = 'inline-flex';
+    if (pill) {
+      if (cloudDb.lastError) {
+        pill.innerText = 'エラーあり';
+        pill.style.background = '#fee2e2';
+        pill.style.color = '#b91c1c';
+        pill.style.borderColor = '#fca5a5';
+      } else {
+        pill.innerText = 'リアルタイム同期中';
+        pill.style.background = 'rgba(16, 185, 129, 0.15)';
+        pill.style.color = '#059669';
+        pill.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+      }
+    }
+  } else {
+    if (userEl) userEl.innerText = cfg ? '未ログイン（設定保存済み）' : '未ログイン';
+    if (loginBtn) loginBtn.style.display = 'inline-flex';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+    if (pill) {
+      pill.innerText = cfg ? '設定済み・未ログイン' : '未接続';
+      pill.style.background = '#f1f5f9';
+      pill.style.color = '#64748b';
+      pill.style.borderColor = '#cbd5e1';
+    }
   }
 }
 
@@ -564,16 +842,21 @@ function updateSyncStatusUI(status, msg) {
   if (!badge || !text) return;
 
   badge.className = 'sync-status-badge';
-  if (status === 'synced') {
-    text.innerText = msg || 'Drive同期済み';
+  if (status === 'synced' || status === 'realtime') {
+    text.innerText = msg || 'クラウド同期中';
     badge.style.background = 'rgba(16, 185, 129, 0.15)';
     badge.style.borderColor = 'rgba(16, 185, 129, 0.4)';
     badge.style.color = '#059669';
   } else if (status === 'expired') {
-    text.innerText = msg || 'Drive要再認証';
+    text.innerText = msg || '要再ログイン';
     badge.style.background = '#fef3c7';
     badge.style.borderColor = '#f59e0b';
     badge.style.color = '#d97706';
+  } else if (status === 'error') {
+    text.innerText = msg || '同期エラー';
+    badge.style.background = '#fee2e2';
+    badge.style.borderColor = '#f87171';
+    badge.style.color = '#dc2626';
   } else if (status === 'syncing') {
     text.innerText = msg || '同期中...';
     badge.style.background = '#e0e7ff';
@@ -758,7 +1041,7 @@ function renderPlannerPage() {
         if (targetDish) {
           targetDish.rating = starValue;
           state.currentPlan.days[dayKey] = dayData;
-          state.saveLocal();
+          state.saveLocal({ scope: 'weekDay', weekStartDate: state.selectedWeekStartDate, dayKey });
           renderPlannerPage();
           showToast(`${starValue}つ星に評価しました！⭐`);
         }
@@ -968,7 +1251,7 @@ function renderShoppingPage() {
         const item = state.extraShoppingItems.find(i => i.id === ingId);
         if (item) {
           item.checked = !item.checked;
-          state.saveLocal();
+          state.saveLocal({ scope: 'extraUpsert', item });
           renderShoppingPage();
         }
       } else {
@@ -979,7 +1262,7 @@ function renderShoppingPage() {
           if (ing) {
             ing.checked = !ing.checked;
             state.currentPlan.days[dayKey] = dayData;
-            state.saveLocal();
+            state.saveLocal({ scope: 'weekDay', weekStartDate: state.selectedWeekStartDate, dayKey });
             renderShoppingPage();
           }
         }
@@ -1110,13 +1393,19 @@ function reorderStoreItems(itemsList, fromIdx, toIdx) {
   const [movedItem] = itemsList.splice(fromIdx, 1);
   itemsList.splice(toIdx, 0, movedItem);
 
+  const changedDayKeys = new Set();
+  const changedExtraItems = [];
+
   // Update orderIndex for all items in this store and lock in state using 10-step scale
   itemsList.forEach((item, newOrder) => {
     const assignedOrder = (newOrder + 1) * 10;
     item.orderIndex = assignedOrder;
     if (item.isExtra) {
       const target = state.extraShoppingItems.find(i => i.id === item.id || i.name === item.name);
-      if (target) target.order = assignedOrder;
+      if (target) {
+        target.order = assignedOrder;
+        changedExtraItems.push(target);
+      }
     } else {
       if (state.currentPlan && state.currentPlan.days && state.currentPlan.days[item.dayKey]) {
         const dayData = normalizeDayData(state.currentPlan.days[item.dayKey]);
@@ -1127,6 +1416,7 @@ function reorderStoreItems(itemsList, fromIdx, toIdx) {
             if (ing) {
               ing.order = assignedOrder;
               state.currentPlan.days[item.dayKey] = dayData;
+              changedDayKeys.add(item.dayKey);
             }
           }
         }
@@ -1134,7 +1424,12 @@ function reorderStoreItems(itemsList, fromIdx, toIdx) {
     }
   });
 
-  state.saveLocal();
+  state.saveLocal({
+    scope: 'reorder',
+    weekStartDate: state.selectedWeekStartDate,
+    dayKeys: Array.from(changedDayKeys),
+    extraItems: changedExtraItems
+  });
   renderShoppingPage();
 }
 window.reorderStoreItems = reorderStoreItems;
@@ -1148,22 +1443,37 @@ function swapShoppingItemsOrder(itemsList, idxA, idxB) {
   itemA.orderIndex = itemB.orderIndex;
   itemB.orderIndex = tempOrder;
 
+  const changedDayKeys = new Set();
+  const changedExtraItems = [];
+
   // Persist order values into state
   [itemA, itemB].forEach(item => {
     if (item.isExtra) {
       const target = state.extraShoppingItems.find(i => i.id === item.id);
-      if (target) target.order = item.orderIndex;
+      if (target) {
+        target.order = item.orderIndex;
+        changedExtraItems.push(target);
+      }
     } else {
       const dayData = normalizeDayData(state.currentPlan.days[item.dayKey]);
       const dish = dayData.dishes.find(d => d.id === item.dishId);
       if (dish && dish.ingredients) {
         const ing = dish.ingredients.find(i => i.id === item.id);
-        if (ing) ing.order = item.orderIndex;
+        if (ing) {
+          ing.order = item.orderIndex;
+          state.currentPlan.days[item.dayKey] = dayData;
+          changedDayKeys.add(item.dayKey);
+        }
       }
     }
   });
 
-  state.saveLocal();
+  state.saveLocal({
+    scope: 'reorder',
+    weekStartDate: state.selectedWeekStartDate,
+    dayKeys: Array.from(changedDayKeys),
+    extraItems: changedExtraItems
+  });
   renderShoppingPage();
 }
 
@@ -1199,8 +1509,8 @@ function renderExtraShoppingItems() {
     container.querySelectorAll('.delete-extra-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const idx = parseInt(btn.getAttribute('data-idx'));
-        state.extraShoppingItems.splice(idx, 1);
-        state.saveLocal();
+        const [removed] = state.extraShoppingItems.splice(idx, 1);
+        state.saveLocal(removed && removed.id ? { scope: 'extraDelete', itemId: removed.id } : true);
         renderShoppingPage();
         showToast('買い物メモを削除しました');
       });
@@ -1291,7 +1601,7 @@ function renderHistoryPage() {
       const targetHist = state.history.find(h => h.id === histId);
       if (targetHist && confirm('この過去の週の献立を全曜日まるごと現在の「今週の献立」に上書き複製しますか？')) {
         state.currentPlan.days = JSON.parse(JSON.stringify(targetHist.plan.days));
-        state.saveLocal();
+        state.saveLocal({ scope: 'weekFull', weekStartDate: state.selectedWeekStartDate });
         showToast('過去の週の献立を全曜日まるごとコピーしました！');
         switchTab('planner');
       }
@@ -1304,7 +1614,7 @@ function renderHistoryPage() {
       const targetHist = state.history.find(h => h.id === histId);
       if (targetHist && confirm(`履歴「${targetHist.title || '過去の献立'}」を削除してもよろしいですか？`)) {
         state.history = state.history.filter(h => h.id !== histId);
-        state.saveLocal();
+        state.saveLocal({ scope: 'historyDelete', histId });
         showToast('履歴を削除しました');
         renderHistoryPage();
       }
@@ -1313,13 +1623,20 @@ function renderHistoryPage() {
 }
 
 /* ==========================================================================
-   4. Google Drive Sync & Settings Page Render
+   4. Google Cloud Shared DB & Settings Page Render
    ========================================================================== */
 function renderSettingsPage() {
-  const clientIdInput = document.getElementById('gdrive-client-id-input');
-  if (clientIdInput) {
-    clientIdInput.value = driveSync.getClientId();
+  const householdInput = document.getElementById('cloud-household-id-input');
+  if (householdInput && document.activeElement !== householdInput) {
+    householdInput.value = cloudDb.getHouseholdId();
   }
+
+  const configInput = document.getElementById('cloud-firebase-config-input');
+  if (configInput && document.activeElement !== configInput) {
+    configInput.value = cloudDb.getConfigDisplayString();
+  }
+
+  updateCloudSettingsStatusUI();
   
   const startDaySelect = document.getElementById('start-day-select');
   if (startDaySelect) {
@@ -1333,7 +1650,7 @@ function renderSettingsPage() {
   if (debugToggle && debugPanel) {
     debugToggle.checked = Boolean(state.debugMode);
     debugPanel.style.display = state.debugMode ? 'block' : 'none';
-    if (state.debugMode) {
+    if (state.debugMode && state.activeTab === 'settings') {
       fetchAndDisplayDebugJson();
     }
   }
@@ -1344,24 +1661,24 @@ async function fetchAndDisplayDebugJson() {
   const info = document.getElementById('debug-status-info');
   if (!container) return;
 
-  if (!driveSync.accessToken) {
+  if (!cloudDb.isSignedIn()) {
     if (info) info.innerText = 'ステータス: 未ログイン (認証を行ってください)';
-    container.innerText = 'Google Driveに未ログインのためデータを表示できません。「Googleアカウントでログイン認証」を行ってください。';
+    container.innerText = 'Google Cloud 共有DBに未ログインのためデータを表示できません。「Googleアカウントでログイン」を行ってください。';
     return;
   }
 
   try {
     if (info) info.innerText = 'ステータス: 取得中...';
-    container.innerText = 'Google Driveから `WeeklyDinnerPlanner_Data.json` を取得しています...';
+    container.innerText = `Cloud Firestore (households/${cloudDb.getHouseholdId()}) からデータを取得しています...`;
     
-    const rawData = await driveSync.loadFromDrive();
+    const rawData = await cloudDb.fetchAllRemoteSnapshot();
     state.lastDebugData = rawData;
     
     if (info) info.innerText = `ステータス: 取得成功 (${new Date().toLocaleTimeString()} 取得)`;
     container.innerText = JSON.stringify(rawData, null, 2);
   } catch (err) {
     if (info) info.innerText = 'ステータス: 取得失敗';
-    container.innerText = `Google Driveからのデータ取得でエラーが発生しました:\n${err.message}`;
+    container.innerText = `Cloud Firestore からのデータ取得でエラーが発生しました:\n${err.message}`;
   }
 }
 
@@ -1394,7 +1711,7 @@ function renderStoreTagsManageList() {
 
       if (confirm(`店舗タグ「${storeObj.name}」を削除しますか？`)) {
         state.stores = state.stores.filter(s => s.id !== storeId);
-        state.saveLocal();
+        state.saveLocal({ scope: 'meta' });
         showToast(`店舗タグ「${storeObj.name}」を削除しました`);
         renderApp();
       }
@@ -1464,7 +1781,7 @@ function setupEventListeners() {
     startDaySelect.addEventListener('change', (e) => {
       state.startDayOfWeek = e.target.value;
       localStorage.setItem('week_start_day', state.startDayOfWeek);
-      state.saveLocal();
+      state.saveLocal({ scope: 'meta' });
       renderApp();
       const selectedDayObj = DAYS_OF_WEEK_BASE.find(d => d.key === state.startDayOfWeek);
       showToast(`献立の開始曜日を「${selectedDayObj ? selectedDayObj.label : ''}」に変更しました！`);
@@ -1496,7 +1813,7 @@ function setupEventListeners() {
             }]
           };
         });
-        state.saveLocal();
+        state.saveLocal({ scope: 'weekFull', weekStartDate: state.selectedWeekStartDate });
         renderApp();
         showToast('今週の献立と食材を一括クリアしました');
       }
@@ -1518,8 +1835,8 @@ function setupEventListeners() {
       };
       if (!Array.isArray(state.history)) state.history = [];
       state.history.unshift(newHist);
-      state.saveLocal();
-      showToast('Google Drive・ローカル履歴にアーカイブ保存しました！');
+      state.saveLocal({ scope: 'historyUpsert', hist: newHist });
+      showToast('履歴にアーカイブ保存しました！');
       switchTab('history');
     }
   };
@@ -1546,7 +1863,7 @@ function setupEventListeners() {
           state.currentPlan.days[k] = dayData;
         }
       });
-      state.saveLocal();
+      state.saveLocal({ scope: 'weekFull', weekStartDate: state.selectedWeekStartDate });
       renderShoppingPage();
       showToast('チェック済みの食材を整理しました！');
     });
@@ -1568,15 +1885,16 @@ function setupEventListeners() {
         state.extraShoppingItems = [];
       }
 
-      state.extraShoppingItems.push({
-        id: 'extra_' + Date.now(),
+      const newExtraItem = {
+        id: 'extra_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
         name: name,
         storeId: storeId,
         checked: false,
-        order: state.extraShoppingItems.length
-      });
+        order: (state.extraShoppingItems.length + 1) * 10
+      };
+      state.extraShoppingItems.push(newExtraItem);
 
-      state.saveLocal();
+      state.saveLocal({ scope: 'extraUpsert', item: newExtraItem });
       if (nameInput) nameInput.value = '';
       renderShoppingPage();
       showToast(`日常品メモ「${name}」を追加しました！`);
@@ -1587,9 +1905,13 @@ function setupEventListeners() {
   const clearExtraItemsBtn = document.getElementById('clear-extra-items-btn');
   if (clearExtraItemsBtn) {
     clearExtraItemsBtn.addEventListener('click', () => {
+      if (!state.extraShoppingItems || state.extraShoppingItems.length === 0) {
+        showToast('削除するメモがありません');
+        return;
+      }
       if (confirm('日常品・その他の買い物メモを一括全削除しますか？')) {
         state.extraShoppingItems = [];
-        state.saveLocal();
+        state.saveLocal({ scope: 'extraClear' });
         renderShoppingPage();
         showToast('日常品メモを一括削除しました');
       }
@@ -1615,7 +1937,7 @@ function setupEventListeners() {
         cssClass: 'tag-custom'
       });
 
-      state.saveLocal();
+      state.saveLocal({ scope: 'meta' });
       nameInput.value = '';
       showToast(`店舗タグ「${name}」を追加しました！`);
       renderApp();
@@ -1632,92 +1954,163 @@ function setupEventListeners() {
             state.stores.push({ ...ds });
           }
         });
-        state.saveLocal();
+        state.saveLocal({ scope: 'meta' });
         showToast('初期店舗タグを復元しました！');
         renderApp();
       }
     });
   }
 
-  // Google Drive Save & Load
-  const gdriveConnectBtn = document.getElementById('gdrive-connect-btn');
-  if (gdriveConnectBtn) {
-    gdriveConnectBtn.addEventListener('click', () => {
-      const clientId = document.getElementById('gdrive-client-id-input').value;
-      if (!clientId) {
-        alert('Google Cloud Client IDを入力してください');
-        return;
-      }
-      driveSync.setClientId(clientId);
-      driveSync.initGoogleAuth(
-        async () => {
-          showToast('Google認証が完了しました！現在入力済みのデータをクラウドへ保存します...');
-          try {
-            updateSyncStatusUI('syncing', 'Drive保存中...');
-            
-            // Strictly save current local entered state to Google Drive to protect user data from deletion
-            await driveSync.saveToDrive(state.exportAllData());
+  // Google Cloud (Cloud Firestore) Config Save
+  const cloudSaveConfigBtn = document.getElementById('cloud-save-config-btn');
+  if (cloudSaveConfigBtn) {
+    cloudSaveConfigBtn.addEventListener('click', async () => {
+      const configInput = document.getElementById('cloud-firebase-config-input');
+      const householdInput = document.getElementById('cloud-household-id-input');
+      const rawText = configInput ? configInput.value : '';
+      const rawHousehold = householdInput ? householdInput.value : '';
 
-            updateSyncStatusUI('synced', 'Drive同期済み');
-            const warningBanner = document.getElementById('drive-unsynced-warning');
-            if (warningBanner) warningBanner.style.display = 'none';
-            renderApp();
-            showToast('現在入力済みの献立データをGoogle Driveへ正常に同期・保存しました！');
-          } catch (err) {
-            updateSyncStatusUI('offline', 'ローカル保存');
-            alert('Google Driveへの保存に失敗しました: ' + err.message);
-          }
-        },
-        (err) => alert('Google認証エラー: ' + err)
-      );
+      try {
+        const saved = cloudDb.saveConfigFromText(rawText, rawHousehold);
+        if (householdInput) householdInput.value = saved.householdId;
+        if (configInput) configInput.value = cloudDb.getConfigDisplayString();
+        updateCloudSettingsStatusUI();
+        showToast(`Google Cloud 接続設定を保存しました（家族ID: ${saved.householdId}）`);
+
+        if (cloudDb.isSignedIn()) {
+          await startRealtimeCloudSync({ promptInitialUpload: false });
+        }
+      } catch (err) {
+        alert('設定の保存に失敗しました: ' + err.message);
+      }
     });
   }
 
-  // Manual Save to Google Drive
-  const gdriveSaveManualBtn = document.getElementById('gdrive-save-manual-btn');
-  if (gdriveSaveManualBtn) {
-    gdriveSaveManualBtn.addEventListener('click', async () => {
-      if (!driveSync.accessToken) {
-        alert('Google Driveに接続されていません。「Googleアカウントでログイン認証」を先に行ってください。');
+  // Copy Share Config for Partner Device
+  const cloudCopyShareBtn = document.getElementById('cloud-copy-share-config-btn');
+  if (cloudCopyShareBtn) {
+    cloudCopyShareBtn.addEventListener('click', async () => {
+      try {
+        const shareJson = cloudDb.exportShareConfig();
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          await navigator.clipboard.writeText(shareJson);
+          showToast('パートナー端末用の設定をコピーしました！そのまま相手の「クラウド設定」欄に貼り付けてください。');
+        } else {
+          prompt('以下をコピーしてパートナー端末の設定欄に貼り付けてください:', shareJson);
+        }
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+  }
+
+  // Google Cloud Login (Firebase Auth with Google)
+  const cloudLoginBtn = document.getElementById('cloud-login-btn');
+  if (cloudLoginBtn) {
+    cloudLoginBtn.addEventListener('click', async () => {
+      const configInput = document.getElementById('cloud-firebase-config-input');
+      const householdInput = document.getElementById('cloud-household-id-input');
+
+      if (!cloudDb.isConfigured() && configInput && configInput.value.trim()) {
+        try {
+          cloudDb.saveConfigFromText(configInput.value, householdInput ? householdInput.value : '');
+        } catch (parseErr) {
+          alert('Firebase設定の形式エラー: ' + parseErr.message);
+          return;
+        }
+      }
+
+      if (!cloudDb.isConfigured()) {
+        alert('先に「Firebase / Google Cloud 設定」を入力して保存してください。');
+        return;
+      }
+
+      try {
+        updateSyncStatusUI('syncing', 'Googleログイン中...');
+        const user = await cloudDb.signInWithGoogle();
+        if (user) {
+          const warningBanner = document.getElementById('drive-unsynced-warning');
+          if (warningBanner) warningBanner.style.display = 'none';
+          updateCloudSettingsStatusUI();
+          showToast(`${user.displayName} としてログインしました！共有DBへ接続します...`);
+          await startRealtimeCloudSync({ promptInitialUpload: true });
+        }
+      } catch (err) {
+        updateSyncStatusUI('offline', 'ローカル保存');
+        alert('Googleログインエラー: ' + err.message);
+      }
+    });
+  }
+
+  // Google Cloud Logout
+  const cloudLogoutBtn = document.getElementById('cloud-logout-btn');
+  if (cloudLogoutBtn) {
+    cloudLogoutBtn.addEventListener('click', async () => {
+      if (!confirm('Google Cloud 共有データベースからログアウトしますか？（端末内のローカルデータは残ります）')) {
         return;
       }
       try {
-        updateSyncStatusUI('syncing', 'Drive保存中...');
-        await driveSync.saveToDrive(state.exportAllData());
-        updateSyncStatusUI('synced', 'Drive同期済み');
-        showToast('Google Driveへ献立・店舗タグ全データを正常に保存しました！');
+        await cloudDb.signOut();
+        updateSyncStatusUI('offline', 'ローカル保存');
+        const warningBanner = document.getElementById('drive-unsynced-warning');
+        if (warningBanner) warningBanner.style.display = 'flex';
+        updateCloudSettingsStatusUI();
+        showToast('ログアウトしました（ローカル保存モード）');
       } catch (err) {
-        if (err.message && err.message.includes('認証期限')) {
-          updateSyncStatusUI('expired', 'Drive要再認証');
-        }
-        alert('Google Drive保存失敗: ' + err.message);
+        alert('ログアウト失敗: ' + err.message);
       }
     });
   }
 
-  // Manual Load from Google Drive
-  const gdriveLoadManualBtn = document.getElementById('gdrive-load-manual-btn');
-  if (gdriveLoadManualBtn) {
-    gdriveLoadManualBtn.addEventListener('click', async () => {
-      if (!driveSync.accessToken) {
-        alert('Google Driveに接続されていません。「Googleアカウントでログイン認証」を先に行ってください。');
+  // Bulk Upload Local Data to Cloud Firestore (Initial Migration)
+  const cloudUploadAllBtn = document.getElementById('cloud-upload-all-btn');
+  if (cloudUploadAllBtn) {
+    cloudUploadAllBtn.addEventListener('click', async () => {
+      if (!cloudDb.isSignedIn()) {
+        alert('Google Cloud 共有DBにログインしていません。先に「Googleアカウントでログイン」を行ってください。');
         return;
       }
-      if (confirm('Google Driveから最新データを取得して現在のデータを上書き復元しますか？')) {
-        try {
-          updateSyncStatusUI('syncing', 'Drive取得中...');
-          const data = await driveSync.loadFromDrive();
-          if (state.importAllData(data, true)) {
-            updateSyncStatusUI('synced', 'Drive同期済み');
-            showToast('Google Driveから最新の献立・店舗タグを同期復元しました！');
-            renderApp();
-          }
-        } catch (err) {
-          if (err.message && err.message.includes('認証期限')) {
-            updateSyncStatusUI('expired', 'Drive要再認証');
-          }
-          alert('Google Driveからの復元失敗: ' + err.message);
+      if (!confirm('現在の端末にある献立・店舗タグ・日常品メモ・履歴をすべて Google Cloud 共有DB へ送信（上書き同期）しますか？')) {
+        return;
+      }
+      try {
+        updateSyncStatusUI('syncing', 'クラウド一括送信中...');
+        await cloudDb.uploadAllLocalData(state.exportAllData());
+        updateSyncStatusUI('realtime', 'クラウド同期中');
+        showToast('ローカルの全データを Google Cloud 共有DB へ正常に送信しました！✨');
+      } catch (err) {
+        const formatted = cloudDb.formatFirestoreError(err);
+        updateSyncStatusUI('error', '同期エラー');
+        alert('クラウドへの一括送信に失敗しました: ' + formatted.message);
+      }
+    });
+  }
+
+  // Manual Reload from Cloud Firestore
+  const cloudReloadBtn = document.getElementById('cloud-reload-btn');
+  if (cloudReloadBtn) {
+    cloudReloadBtn.addEventListener('click', async () => {
+      if (!cloudDb.isSignedIn()) {
+        alert('Google Cloud 共有DBにログインしていません。先に「Googleアカウントでログイン」を行ってください。');
+        return;
+      }
+      try {
+        updateSyncStatusUI('syncing', 'クラウド取得中...');
+        const snapshot = await cloudDb.fetchAllRemoteSnapshot();
+        if (snapshot.startDayOfWeek || (Array.isArray(snapshot.stores) && snapshot.stores.length > 0)) {
+          state.applyRemoteMeta({ startDayOfWeek: snapshot.startDayOfWeek, stores: snapshot.stores });
         }
+        if (snapshot.plansByWeek && Object.keys(snapshot.plansByWeek).length > 0) {
+          state.applyRemoteWeeks(snapshot.plansByWeek);
+        }
+        state.applyRemoteExtraItems(snapshot.extraShoppingItems || []);
+        state.applyRemoteHistory(snapshot.history || []);
+        updateSyncStatusUI('realtime', 'クラウド同期中');
+        showToast('Google Cloud 共有DB から最新データを再取得しました！');
+      } catch (err) {
+        const formatted = cloudDb.formatFirestoreError(err);
+        updateSyncStatusUI('error', '同期エラー');
+        alert('クラウドからの取得に失敗しました: ' + formatted.message);
       }
     });
   }
@@ -1750,7 +2143,7 @@ function setupEventListeners() {
         alert('取得済みのJSONデータがありません');
         return;
       }
-      if (confirm('Google Driveから取得したJSONデータをアプリに強制適用しますか？')) {
+      if (confirm('Cloud Firestore から取得したJSONデータをアプリに強制適用しますか？')) {
         state.importAllData(state.lastDebugData, true);
         showToast('JSONデータをアプリに適用しました！');
         renderApp();
@@ -1961,7 +2354,7 @@ function copyDayMenu(sourceDayKey, targetDayKey) {
   });
 
   state.currentPlan.days[targetDayKey] = deepCopy;
-  state.saveLocal();
+  state.saveLocal({ scope: 'weekDay', weekStartDate: state.selectedWeekStartDate, dayKey: targetDayKey });
 
   const sourceDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === sourceDayKey) || { label: sourceDayKey };
   const targetDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === targetDayKey) || { label: targetDayKey };
@@ -2037,7 +2430,7 @@ function copyHistoryDayMenu(histId, dayKey, targetDayKey, mode = 'append') {
   }
 
   state.currentPlan.days[targetDayKey] = existingTargetData;
-  state.saveLocal();
+  state.saveLocal({ scope: 'weekDay', weekStartDate: state.selectedWeekStartDate, dayKey: targetDayKey });
 
   const targetDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === targetDayKey) || { label: targetDayKey };
   const copiedDishTitles = deepCopiedDishes.map(d => d.title).join(' / ');
@@ -2331,6 +2724,8 @@ function setupModalHandlers() {
       const dishesByTargetDay = {};
       const targetDayNames = [];
 
+      const changedDayKeys = new Set([sourceDayKey]);
+
       if (validDishes.length === 0) {
         state.currentPlan.days[sourceDayKey] = {
           dishes: [{ id: 'dish_' + Date.now(), title: '', rating: 5, memo: '', ingredients: [] }]
@@ -2355,6 +2750,7 @@ function setupModalHandlers() {
         Object.keys(dishesByTargetDay).forEach(targetKey => {
           if (targetKey === sourceDayKey) return; // Already handled above
 
+          changedDayKeys.add(targetKey);
           const targetDayInfo = DAYS_OF_WEEK_BASE.find(d => d.key === targetKey) || { label: targetKey };
           targetDayNames.push(targetDayInfo.label);
 
@@ -2371,7 +2767,11 @@ function setupModalHandlers() {
         });
       }
 
-      state.saveLocal();
+      state.saveLocal({
+        scope: 'weekDays',
+        weekStartDate: state.selectedWeekStartDate,
+        dayKeys: Array.from(changedDayKeys)
+      });
       modal.classList.remove('active');
       renderApp();
 
@@ -2450,47 +2850,6 @@ function setupModalHandlers() {
         const mode = modeSelect ? modeSelect.value : 'append';
         copyHistoryDayMenu(pendingCopyHistId, pendingCopyHistDayKey, targetDayKey, mode);
         closeCopyHistModal();
-      }
-    });
-  }
-
-  // Non-menu Extra Shopping Form Handlers
-  const addExtraForm = document.getElementById('add-extra-item-form');
-  if (addExtraForm) {
-    addExtraForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const input = document.getElementById('extra-item-name-input');
-      const select = document.getElementById('extra-item-store-select');
-      const val = input.value.trim();
-      if (!val) return;
-
-      if (!state.extraShoppingItems) state.extraShoppingItems = [];
-      state.extraShoppingItems.push({
-        id: 'extra_' + Date.now() + Math.random().toString(36).substr(2, 4),
-        name: val,
-        storeId: select ? select.value : 'other',
-        checked: false
-      });
-
-      state.saveLocal();
-      input.value = '';
-      showToast(`買い物メモ「${val}」を追加しました！`);
-      renderShoppingPage();
-    });
-  }
-
-  const clearExtraItemsBtn = document.getElementById('clear-extra-items-btn');
-  if (clearExtraItemsBtn) {
-    clearExtraItemsBtn.addEventListener('click', () => {
-      if (!state.extraShoppingItems || state.extraShoppingItems.length === 0) {
-        showToast('削除するメモがありません');
-        return;
-      }
-      if (confirm('日常品・その他買い物メモをすべて全削除しますか？')) {
-        state.extraShoppingItems = [];
-        state.saveLocal();
-        renderShoppingPage();
-        showToast('買い物メモを一括削除しました');
       }
     });
   }

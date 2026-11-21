@@ -1,10 +1,10 @@
-const CACHE_NAME = 'weekly-dinner-v2.5.1';
+const CACHE_NAME = 'weekly-dinner-v3.0.0';
 const ASSETS = [
   './',
   './index.html',
   './styles.css',
   './app.js',
-  './googleDrive.js',
+  './cloudDb.js',
   './manifest.json'
 ];
 
