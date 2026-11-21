@@ -415,8 +415,13 @@ server.listen(8080, async () => {
     console.log(`  TOTAL INTERACTIVE UI COMPONENTS CLICKED: ${totalClickedCount}  `);
     console.log('===========================================================\n');
 
+    if (testTotalCount === 0 || testPassCount < testTotalCount || pageErrors.length > 0) {
+      process.exitCode = 1;
+    }
+
   } catch (e) {
     console.error('Playwright Regression Suite Error:', e);
+    process.exitCode = 1;
   } finally {
     await browser.close();
     server.close();
