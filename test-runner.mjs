@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v2.5.0', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v2.5.1', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -79,6 +79,28 @@ server.listen(8080, async () => {
     await page.waitForTimeout(300);
     const isModalActiveMon = await page.locator('#edit-day-modal.active').isVisible();
     assertTest('Day Card "メニュー編集・追加" Button (Monday Modal Open)', isModalActiveMon);
+
+    // Verify modal ingredient add ("+") and remove (trash icon) icon-only buttons
+    const addIngBtn = page.locator('#edit-day-modal .add-dish-ing-btn').first();
+    const addIngBtnText = (await addIngBtn.innerText()).trim();
+    const addIngBtnIconCount = await addIngBtn.locator('svg, i[data-lucide="plus"]').count();
+    assertTest('Modal Add Ingredient Button is "+" Icon-Only', addIngBtnText === '' && addIngBtnIconCount === 1, `Text="${addIngBtnText}", Icons=${addIngBtnIconCount}`);
+
+    const ingCountBeforeAdd = await page.locator('#edit-day-modal .remove-ing-btn').count();
+    await addIngBtn.click();
+    await page.waitForTimeout(200);
+    const ingCountAfterAdd = await page.locator('#edit-day-modal .remove-ing-btn').count();
+    assertTest('Modal "+" Button Adds Ingredient Row', ingCountAfterAdd === ingCountBeforeAdd + 1, `${ingCountBeforeAdd} -> ${ingCountAfterAdd}`);
+
+    const removeIngBtn = page.locator('#edit-day-modal .remove-ing-btn').last();
+    const removeIngBtnText = (await removeIngBtn.innerText()).trim();
+    const removeIngBtnIconCount = await removeIngBtn.locator('svg, i[data-lucide="trash-2"]').count();
+    assertTest('Modal Remove Ingredient Button is Trash Icon-Only', removeIngBtnText === '' && removeIngBtnIconCount === 1, `Text="${removeIngBtnText}", Icons=${removeIngBtnIconCount}`);
+
+    await removeIngBtn.click();
+    await page.waitForTimeout(200);
+    const ingCountAfterRemove = await page.locator('#edit-day-modal .remove-ing-btn').count();
+    assertTest('Modal Trash Button Removes Ingredient Row', ingCountAfterRemove === ingCountBeforeAdd, `${ingCountAfterAdd} -> ${ingCountAfterRemove}`);
 
     await page.click('#close-modal-btn');
     await page.waitForTimeout(200);

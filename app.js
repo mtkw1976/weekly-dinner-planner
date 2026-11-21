@@ -460,7 +460,7 @@ class AppState {
 
   exportAllData() {
     return {
-      version: '2.5.0',
+      version: '2.5.1',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -2117,12 +2117,12 @@ function renderModalDishesList() {
         <!-- Ingredients list for this dish -->
         <div style="display:flex;align-items:center;justify-content:space-between;margin-top:12px;margin-bottom:6px;">
           <span style="font-size:0.82rem;font-weight:700;color:var(--text-muted);">必要食材と購入スーパー</span>
-          <div style="display:flex;gap:6px;">
+          <div style="display:flex;gap:6px;align-items:center;">
             <button type="button" class="btn btn-secondary btn-sm clear-dish-ings-btn" data-dish-idx="${dIdx}" style="color:#f43f5e;font-size:0.72rem;padding:2px 6px;">
               一括全削除
             </button>
-            <button type="button" class="btn btn-secondary btn-sm add-dish-ing-btn" data-dish-idx="${dIdx}" style="color:var(--accent-rose);font-size:0.75rem;padding:3px 8px;">
-              <i data-lucide="plus" style="width:12px;height:12px;"></i> 食材を追加
+            <button type="button" class="btn btn-secondary btn-sm add-dish-ing-btn" data-dish-idx="${dIdx}" title="食材を追加" aria-label="食材を追加" style="color:var(--accent-rose);padding:4px 8px;min-width:28px;height:26px;">
+              <i data-lucide="plus" style="width:14px;height:14px;"></i>
             </button>
           </div>
         </div>
@@ -2136,8 +2136,8 @@ function renderModalDishesList() {
                   <option value="${s.id}" ${ing.storeId === s.id ? 'selected' : ''}>${escapeHtml(s.name)}</option>
                 `).join('')}
               </select>
-              <button type="button" class="btn btn-secondary btn-sm remove-ing-btn" data-dish-idx="${dIdx}" data-ing-idx="${iIdx}" style="color:#f43f5e;padding:4px 8px;">
-                削除
+              <button type="button" class="btn btn-secondary btn-sm remove-ing-btn" data-dish-idx="${dIdx}" data-ing-idx="${iIdx}" title="食材を削除" aria-label="食材を削除" style="color:#f43f5e;padding:6px 8px;flex-shrink:0;">
+                <i data-lucide="trash-2" style="width:14px;height:14px;"></i>
               </button>
             </div>
           `).join('')}
