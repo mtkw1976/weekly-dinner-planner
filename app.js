@@ -76,6 +76,60 @@ function planHasContent(plan) {
   });
 }
 
+function planHasNamedDish(plan) {
+  if (!plan || !plan.days || typeof plan.days !== 'object') return false;
+  return Object.values(plan.days).some((dayRaw) => {
+    const day = normalizeDayData(dayRaw);
+    return day.dishes.some((dish) => dish.title && dish.title.trim() !== '');
+  });
+}
+
+/**
+ * Normalize dish/item names for reliable deduplication and fuzzy autocomplete search.
+ */
+function normalizeLookupName(str) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .normalize('NFKC')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase();
+}
+
+function toHiragana(str) {
+  return normalizeLookupName(str).replace(/[\u30A1-\u30F6]/g, (ch) =>
+    String.fromCharCode(ch.charCodeAt(0) - 0x60)
+  );
+}
+
+/**
+ * Deterministic Firestore-safe map key (never contains '.', '/', '~', '*', '[', ']').
+ */
+function makeCatalogKey(rawName) {
+  const norm = normalizeLookupName(rawName);
+  if (!norm) return '';
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  for (let i = 0; i < norm.length; i++) {
+    const c = norm.charCodeAt(i);
+    h1 ^= c;
+    h1 = Math.imul(h1, 0x01000193) >>> 0;
+    h2 ^= (c + i);
+    h2 = Math.imul(h2, 0x85ebca6b) >>> 0;
+  }
+  return `k_${h1.toString(36)}_${h2.toString(36)}`;
+}
+
+function diffDaysFromToday(isoDateStr) {
+  if (!isoDateStr || typeof isoDateStr !== 'string') return 999;
+  const target = parseISODate(isoDateStr);
+  if (isNaN(target)) return 999;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diffMs = today.getTime() - target.getTime();
+  return Math.max(0, Math.floor(diffMs / 86400000));
+}
+
 function parseISODate(isoStr) {
   if (!isoStr || typeof isoStr !== 'string') return new Date();
   const parts = isoStr.split('-').map(Number);
@@ -389,13 +443,216 @@ class AppState {
     this.backupHistory = Array.isArray(JSON.parse(localStorage.getItem('backup_files_history')))
       ? JSON.parse(localStorage.getItem('backup_files_history'))
       : [];
+    this.dishCatalog = {};
+    try {
+      const savedDishCat = JSON.parse(localStorage.getItem('dish_catalog'));
+      if (savedDishCat && typeof savedDishCat === 'object' && !Array.isArray(savedDishCat)) {
+        this.dishCatalog = savedDishCat;
+      }
+    } catch (e) {}
+    this.itemCatalog = {};
+    try {
+      const savedItemCat = JSON.parse(localStorage.getItem('item_catalog'));
+      if (savedItemCat && typeof savedItemCat === 'object' && !Array.isArray(savedItemCat)) {
+        this.itemCatalog = savedItemCat;
+      }
+    } catch (e) {}
+
     this.activeTab = 'planner'; // planner, shopping, history, settings
+    this.activeHistorySubtab = 'archive'; // archive, ranking, suggestions
+    this.rankingSortBy = 'count'; // count, recent, rating
+    this.rankingSearchQuery = '';
+    this.suggestionMinDays = 14;
+    this.suggestionsCollapsed = localStorage.getItem('suggestions_collapsed') === 'true';
+    this.suggestionShuffleOffset = 0;
+
     this.shoppingFilterStore = 'all';
     this.editingDayKey = null;
     this.editingSourceDayKey = null;
     this.editingDayData = null;
     this.debugMode = localStorage.getItem('gdrive_debug_mode') === 'true';
     this.lastDebugData = null;
+
+    // Seed local autocomplete catalog from existing plans, history, and extra items
+    this.seedCatalogFromExistingData();
+  }
+
+  seedCatalogFromExistingData() {
+    const todayStr = formatDateToISO(new Date());
+
+    // 1. Seed from all saved weeks
+    Object.keys(this.plansByWeek || {}).forEach((weekKey) => {
+      const plan = this.plansByWeek[weekKey];
+      if (!plan || !plan.days) return;
+      const weekStart = parseISODate(plan.startDate || weekKey);
+      Object.keys(plan.days).forEach((dayKey) => {
+        const dayDateStr = formatDateToISO(getDayDateInWeek(weekStart, dayKey));
+        const dayData = normalizeDayData(plan.days[dayKey]);
+        dayData.dishes.forEach((dish) => {
+          this._upsertDishCatalogLocal(dish, dayDateStr, false);
+          (dish.ingredients || []).forEach((ing) => {
+            this._upsertItemCatalogLocal(ing.name, ing.storeId, 'ingredient', dayDateStr, false);
+          });
+        });
+      });
+    });
+
+    // 2. Seed from history archives
+    (this.history || []).forEach((hist) => {
+      if (!hist || !hist.plan || !hist.plan.days) return;
+      const weekStart = parseISODate(hist.startDate || hist.plan.startDate || todayStr);
+      Object.keys(hist.plan.days).forEach((dayKey) => {
+        const dayDateStr = formatDateToISO(getDayDateInWeek(weekStart, dayKey));
+        const dayData = normalizeDayData(hist.plan.days[dayKey]);
+        dayData.dishes.forEach((dish) => {
+          this._upsertDishCatalogLocal(dish, dayDateStr, false);
+          (dish.ingredients || []).forEach((ing) => {
+            this._upsertItemCatalogLocal(ing.name, ing.storeId, 'ingredient', dayDateStr, false);
+          });
+        });
+      });
+    });
+
+    // 3. Seed from current extra shopping items
+    (this.extraShoppingItems || []).forEach((item) => {
+      this._upsertItemCatalogLocal(item.name, item.storeId, 'extra', todayStr, false);
+    });
+  }
+
+  _upsertDishCatalogLocal(dish, dateStr, incrementCount = true) {
+    if (!dish || typeof dish.title !== 'string') return null;
+    const title = dish.title.trim();
+    if (!title) return null;
+    const key = makeCatalogKey(title);
+    if (!key) return null;
+
+    const existing = this.dishCatalog[key];
+    const cleanIngredients = Array.isArray(dish.ingredients)
+      ? dish.ingredients
+          .filter((i) => i && typeof i.name === 'string' && i.name.trim() !== '')
+          .map((i) => ({ name: i.name.trim(), storeId: i.storeId || 'other' }))
+      : [];
+
+    const existingDate = existing && existing.lastUsedAt ? existing.lastUsedAt : '';
+    const isNewerOrSame = !existingDate || !dateStr || dateStr >= existingDate;
+
+    const updated = {
+      key,
+      title: isNewerOrSame ? title : existing.title,
+      normalizedTitle: normalizeLookupName(title),
+      lastMemo: isNewerOrSame && dish.memo ? String(dish.memo).trim() : (existing ? existing.lastMemo || '' : ''),
+      lastRating: isNewerOrSame && typeof dish.rating === 'number' ? dish.rating : (existing ? existing.lastRating || 5 : 5),
+      lastIngredients: (isNewerOrSame && cleanIngredients.length > 0)
+        ? cleanIngredients
+        : (existing && Array.isArray(existing.lastIngredients) ? existing.lastIngredients : cleanIngredients),
+      count: existing ? (incrementCount ? (existing.count || 1) + 1 : Math.max(1, existing.count || 1)) : 1,
+      lastUsedAt: isNewerOrSame ? (dateStr || formatDateToISO(new Date())) : existingDate
+    };
+
+    this.dishCatalog[key] = updated;
+    return updated;
+  }
+
+  _upsertItemCatalogLocal(rawName, storeId, kind = 'ingredient', dateStr = '', incrementCount = true) {
+    if (!rawName || typeof rawName !== 'string') return null;
+    const name = rawName.trim();
+    if (!name) return null;
+    const key = makeCatalogKey(name);
+    if (!key) return null;
+
+    const existing = this.itemCatalog[key];
+    const resolvedKind = existing && existing.kind && existing.kind !== kind ? 'both' : kind;
+    const resolvedDate = dateStr || formatDateToISO(new Date());
+    const existingDate = existing && existing.lastUsedAt ? existing.lastUsedAt : '';
+    const isNewerOrSame = !existingDate || resolvedDate >= existingDate;
+
+    const updated = {
+      key,
+      name: isNewerOrSame ? name : existing.name,
+      normalizedName: normalizeLookupName(name),
+      lastStoreId: (isNewerOrSame && storeId) ? storeId : (existing ? existing.lastStoreId || 'other' : (storeId || 'other')),
+      kind: resolvedKind,
+      count: existing ? (incrementCount ? (existing.count || 1) + 1 : Math.max(1, existing.count || 1)) : 1,
+      lastUsedAt: isNewerOrSame ? resolvedDate : existingDate
+    };
+
+    this.itemCatalog[key] = updated;
+    return updated;
+  }
+
+  /**
+   * Automatically save/update a week's archive entry in history (1 entry per week: auto_{weekStartDate}).
+   */
+  autoArchiveWeek(weekStartDateStr) {
+    if (!weekStartDateStr) return null;
+    const plan = this.plansByWeek[weekStartDateStr];
+    if (!plan || !planHasNamedDish(plan)) return null;
+
+    const autoId = `auto_${weekStartDateStr}`;
+    const autoEntry = {
+      id: autoId,
+      isAuto: true,
+      savedAt: new Date().toISOString(),
+      startDate: weekStartDateStr,
+      title: `${formatDateRange(weekStartDateStr)} の献立`,
+      plan: JSON.parse(JSON.stringify(plan))
+    };
+
+    if (!Array.isArray(this.history)) this.history = [];
+    const existingIdx = this.history.findIndex((h) => h && h.id === autoId);
+    if (existingIdx >= 0) {
+      this.history[existingIdx] = autoEntry;
+    } else {
+      this.history.unshift(autoEntry);
+    }
+
+    // Keep history sorted by startDate desc (newest week first), fallback to savedAt desc
+    this.history.sort((a, b) => {
+      const aDate = String(a.startDate || (a.plan && a.plan.startDate) || '');
+      const bDate = String(b.startDate || (b.plan && b.plan.startDate) || '');
+      if (aDate !== bDate) return bDate.localeCompare(aDate);
+      return String(b.savedAt || '').localeCompare(String(a.savedAt || ''));
+    });
+
+    return autoEntry;
+  }
+
+  /**
+   * Collect updated catalog entries for changed days of a week.
+   */
+  recordWeekToCatalog(weekStartDateStr, dayKeys = null) {
+    const plan = this.plansByWeek[weekStartDateStr];
+    if (!plan || !plan.days) return { dishesDelta: {}, itemsDelta: {} };
+    const weekStart = parseISODate(plan.startDate || weekStartDateStr);
+    const keysToScan = Array.isArray(dayKeys) && dayKeys.length > 0
+      ? dayKeys
+      : ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+
+    const dishesDelta = {};
+    const itemsDelta = {};
+
+    keysToScan.forEach((dk) => {
+      const dayRaw = plan.days[dk];
+      if (!dayRaw) return;
+      const dayDateStr = formatDateToISO(getDayDateInWeek(weekStart, dk));
+      const dayData = normalizeDayData(dayRaw);
+      dayData.dishes.forEach((dish) => {
+        const dEntry = this._upsertDishCatalogLocal(dish, dayDateStr, true);
+        if (dEntry) dishesDelta[dEntry.key] = dEntry;
+        (dish.ingredients || []).forEach((ing) => {
+          const iEntry = this._upsertItemCatalogLocal(ing.name, ing.storeId, 'ingredient', dayDateStr, true);
+          if (iEntry) itemsDelta[iEntry.key] = iEntry;
+        });
+      });
+    });
+
+    return { dishesDelta, itemsDelta };
+  }
+
+  recordExtraItemToCatalog(item) {
+    if (!item || !item.name) return {};
+    const entry = this._upsertItemCatalogLocal(item.name, item.storeId, 'extra', formatDateToISO(new Date()), true);
+    return entry ? { [entry.key]: entry } : {};
   }
 
   saveBackupHistory(filename, data) {
@@ -478,6 +735,31 @@ class AppState {
   }
 
   saveLocal(options = false) {
+    const syncOpt = (options && typeof options === 'object') ? options : null;
+    const scope = syncOpt ? syncOpt.scope : null;
+    const targetWeek = (syncOpt && syncOpt.weekStartDate) ? syncOpt.weekStartDate : this.selectedWeekStartDate;
+
+    let autoArchivedEntry = null;
+    let dishesDelta = {};
+    let itemsDelta = {};
+
+    // Automatic history archiving & catalog recording on menu/item changes
+    if (syncOpt && !syncOpt.skipAutoHistory) {
+      if (scope === 'weekDay' || scope === 'weekDays' || scope === 'weekFull') {
+        const changedKeys = scope === 'weekDay' && syncOpt.dayKey
+          ? [syncOpt.dayKey]
+          : (scope === 'weekDays' && Array.isArray(syncOpt.dayKeys) ? syncOpt.dayKeys : null);
+        const rec = this.recordWeekToCatalog(targetWeek, changedKeys);
+        dishesDelta = rec.dishesDelta;
+        itemsDelta = rec.itemsDelta;
+        if (!syncOpt.skipAutoArchive) {
+          autoArchivedEntry = this.autoArchiveWeek(targetWeek);
+        }
+      } else if (scope === 'extraUpsert' && syncOpt.item && !syncOpt.skipCatalog) {
+        itemsDelta = this.recordExtraItemToCatalog(syncOpt.item);
+      }
+    }
+
     localStorage.setItem('stores', JSON.stringify(this.stores));
     localStorage.setItem('selected_week_start_date', this.selectedWeekStartDate);
     localStorage.setItem('plans_by_week', JSON.stringify(this.plansByWeek));
@@ -485,14 +767,23 @@ class AppState {
     localStorage.setItem('history_plans', JSON.stringify(this.history));
     localStorage.setItem('extra_shopping_items', JSON.stringify(this.extraShoppingItems));
     localStorage.setItem('week_start_day', this.startDayOfWeek);
+    try {
+      localStorage.setItem('dish_catalog', JSON.stringify(this.dishCatalog));
+      localStorage.setItem('item_catalog', JSON.stringify(this.itemCatalog));
+    } catch (e) {}
 
     const skipCloudSync = options === true || (options && options.skipCloudSync === true);
     if (skipCloudSync || !cloudDb.isSignedIn()) {
       return;
     }
 
-    const syncOpt = (options && typeof options === 'object') ? options : { scope: 'weekFull', weekStartDate: this.selectedWeekStartDate };
-    this._syncToCloud(syncOpt);
+    const effectiveOpt = syncOpt || { scope: 'weekFull', weekStartDate: this.selectedWeekStartDate };
+    this._syncToCloud({
+      ...effectiveOpt,
+      autoArchivedEntry,
+      dishesDelta,
+      itemsDelta
+    });
   }
 
   _syncToCloud(syncOpt) {
@@ -500,38 +791,37 @@ class AppState {
 
     updateSyncStatusUI('syncing', 'クラウド同期中...');
 
-    let promise;
+    const tasks = [];
     const scope = syncOpt.scope || 'all';
     const targetWeek = syncOpt.weekStartDate || this.selectedWeekStartDate;
 
     try {
       if (scope === 'meta') {
-        promise = cloudDb.saveMetaConfig({
+        tasks.push(cloudDb.saveMetaConfig({
           startDayOfWeek: this.startDayOfWeek,
           stores: this.stores
-        });
+        }));
       } else if (scope === 'weekDay' && syncOpt.dayKey) {
         const plan = this.ensureWeekPlan(targetWeek);
         const dayData = normalizeDayData(plan.days[syncOpt.dayKey]);
-        promise = cloudDb.saveWeekDays(targetWeek, { [syncOpt.dayKey]: dayData });
+        tasks.push(cloudDb.saveWeekDays(targetWeek, { [syncOpt.dayKey]: dayData }));
       } else if (scope === 'weekDays' && Array.isArray(syncOpt.dayKeys) && syncOpt.dayKeys.length > 0) {
         const plan = this.ensureWeekPlan(targetWeek);
         const daysMap = {};
         syncOpt.dayKeys.forEach((dk) => {
           daysMap[dk] = normalizeDayData(plan.days[dk]);
         });
-        promise = cloudDb.saveWeekDays(targetWeek, daysMap);
+        tasks.push(cloudDb.saveWeekDays(targetWeek, daysMap));
       } else if (scope === 'weekFull') {
         const plan = this.ensureWeekPlan(targetWeek);
-        promise = cloudDb.saveFullWeek(targetWeek, plan);
+        tasks.push(cloudDb.saveFullWeek(targetWeek, plan));
       } else if (scope === 'extraUpsert' && syncOpt.item) {
-        promise = cloudDb.upsertExtraItem(syncOpt.item);
+        tasks.push(cloudDb.upsertExtraItem(syncOpt.item));
       } else if (scope === 'extraDelete' && syncOpt.itemId) {
-        promise = cloudDb.deleteExtraItem(syncOpt.itemId);
+        tasks.push(cloudDb.deleteExtraItem(syncOpt.itemId));
       } else if (scope === 'extraClear') {
-        promise = cloudDb.clearAllExtraItems();
+        tasks.push(cloudDb.clearAllExtraItems());
       } else if (scope === 'reorder') {
-        const tasks = [];
         if (Array.isArray(syncOpt.dayKeys) && syncOpt.dayKeys.length > 0) {
           const plan = this.ensureWeekPlan(targetWeek);
           const daysMap = {};
@@ -543,19 +833,31 @@ class AppState {
         if (Array.isArray(syncOpt.extraItems) && syncOpt.extraItems.length > 0) {
           tasks.push(cloudDb.upsertExtraItemsBatch(syncOpt.extraItems));
         }
-        promise = Promise.all(tasks);
       } else if (scope === 'historyUpsert' && syncOpt.hist) {
-        promise = cloudDb.upsertHistoryItem(syncOpt.hist);
+        tasks.push(cloudDb.upsertHistoryItem(syncOpt.hist));
       } else if (scope === 'historyDelete' && syncOpt.histId) {
-        promise = cloudDb.deleteHistoryItem(syncOpt.histId);
+        tasks.push(cloudDb.deleteHistoryItem(syncOpt.histId));
       } else {
-        promise = cloudDb.uploadAllLocalData(this.exportAllData());
+        tasks.push(cloudDb.uploadAllLocalData(this.exportAllData()));
+      }
+
+      // Also push automatic history archive & catalog deltas to Cloud Firestore
+      if (scope !== 'all') {
+        if (syncOpt.autoArchivedEntry) {
+          tasks.push(cloudDb.upsertHistoryItem(syncOpt.autoArchivedEntry));
+        }
+        if (syncOpt.dishesDelta && Object.keys(syncOpt.dishesDelta).length > 0) {
+          tasks.push(cloudDb.mergeDishCatalogEntries(syncOpt.dishesDelta));
+        }
+        if (syncOpt.itemsDelta && Object.keys(syncOpt.itemsDelta).length > 0) {
+          tasks.push(cloudDb.mergeItemCatalogEntries(syncOpt.itemsDelta));
+        }
       }
     } catch (err) {
-      promise = Promise.reject(err);
+      tasks.push(Promise.reject(err));
     }
 
-    Promise.resolve(promise)
+    Promise.all(tasks)
       .then(() => {
         updateSyncStatusUI('realtime', 'クラウド同期中');
         updateCloudSettingsStatusUI();
@@ -622,9 +924,13 @@ class AppState {
         startDate: normalizedKey
       });
       this.plansByWeek[normalizedKey] = sanitized;
+      if (planHasNamedDish(sanitized) && !this.history.some((h) => h && h.id === `auto_${normalizedKey}`)) {
+        this.autoArchiveWeek(normalizedKey);
+      }
     });
 
     this.ensureWeekPlan(this.selectedWeekStartDate);
+    this.seedCatalogFromExistingData();
     this.saveLocal(true);
     renderApp();
     return true;
@@ -639,6 +945,7 @@ class AppState {
       checked: Boolean(item.checked),
       order: typeof item.order === 'number' ? item.order : idx * 10
     }));
+    this.seedCatalogFromExistingData();
     this.saveLocal(true);
     renderApp();
     return true;
@@ -647,14 +954,51 @@ class AppState {
   applyRemoteHistory(historyList) {
     if (!Array.isArray(historyList)) return false;
     this.history = historyList.filter((h) => h && typeof h === 'object');
+    this.seedCatalogFromExistingData();
     this.saveLocal(true);
     renderApp();
     return true;
   }
 
+  applyRemoteDishCatalog(entries) {
+    if (!entries || typeof entries !== 'object') return false;
+    Object.keys(entries).forEach((k) => {
+      const entry = entries[k];
+      if (!entry || typeof entry !== 'object' || !entry.title) return;
+      const existing = this.dishCatalog[k];
+      if (!existing || !existing.lastUsedAt || (entry.lastUsedAt && entry.lastUsedAt >= existing.lastUsedAt)) {
+        this.dishCatalog[k] = {
+          ...existing,
+          ...entry,
+          count: Math.max(existing ? (existing.count || 1) : 1, entry.count || 1)
+        };
+      }
+    });
+    this.saveLocal(true);
+    return true;
+  }
+
+  applyRemoteItemCatalog(entries) {
+    if (!entries || typeof entries !== 'object') return false;
+    Object.keys(entries).forEach((k) => {
+      const entry = entries[k];
+      if (!entry || typeof entry !== 'object' || !entry.name) return;
+      const existing = this.itemCatalog[k];
+      if (!existing || !existing.lastUsedAt || (entry.lastUsedAt && entry.lastUsedAt >= existing.lastUsedAt)) {
+        this.itemCatalog[k] = {
+          ...existing,
+          ...entry,
+          count: Math.max(existing ? (existing.count || 1) : 1, entry.count || 1)
+        };
+      }
+    });
+    this.saveLocal(true);
+    return true;
+  }
+
   exportAllData() {
     return {
-      version: '3.0.1',
+      version: '3.1.0',
       exportedAt: new Date().toISOString(),
       startDayOfWeek: this.startDayOfWeek,
       selectedWeekStartDate: this.selectedWeekStartDate,
@@ -662,7 +1006,9 @@ class AppState {
       plansByWeek: this.plansByWeek,
       currentPlan: this.currentPlan,
       history: this.history,
-      extraShoppingItems: this.extraShoppingItems
+      extraShoppingItems: this.extraShoppingItems,
+      dishCatalog: this.dishCatalog,
+      itemCatalog: this.itemCatalog
     };
   }
 
@@ -685,6 +1031,13 @@ class AppState {
     if (data.extraShoppingItems && Array.isArray(data.extraShoppingItems)) {
       this.extraShoppingItems = data.extraShoppingItems;
     }
+    if (data.dishCatalog && typeof data.dishCatalog === 'object') {
+      this.dishCatalog = { ...this.dishCatalog, ...data.dishCatalog };
+    }
+    if (data.itemCatalog && typeof data.itemCatalog === 'object') {
+      this.itemCatalog = { ...this.itemCatalog, ...data.itemCatalog };
+    }
+    this.seedCatalogFromExistingData();
     this.saveLocal(skipCloudSync ? true : { scope: 'all' });
     return true;
   }
@@ -803,6 +1156,12 @@ async function startRealtimeCloudSync({ promptInitialUpload = false } = {}) {
           state.applyRemoteHistory(historyList);
         }
         updateCloudSettingsStatusUI();
+      },
+      onDishCatalogUpdate: (entries) => {
+        state.applyRemoteDishCatalog(entries);
+      },
+      onItemCatalogUpdate: (entries) => {
+        state.applyRemoteItemCatalog(entries);
       },
       onError: (formattedErr, rawErr) => {
         console.error('Realtime sync error:', rawErr);
@@ -986,6 +1345,7 @@ function renderPlannerPage() {
   if (!container || !dateRangeEl) return;
 
   renderExtraShoppingItems();
+  renderPlannerSuggestionsCard();
 
   const weekStartDate = parseISODate(state.selectedWeekStartDate);
   const weekEndDate = new Date(weekStartDate);
@@ -1151,6 +1511,7 @@ function renderShoppingPage() {
   if (!filterBar || !shoppingListContainer) return;
 
   renderExtraShoppingItems();
+  renderPlannerSuggestionsCard();
 
   const sortedStores = getSortedStoresByUsage();
   let filterHtml = `
@@ -1578,9 +1939,373 @@ function renderExtraShoppingItems() {
 }
 
 /* ==========================================================================
-   3. History Archive Page Render
+   3. Dish Analytics (Ranking & Overdue Suggestions) + History Page Render
    ========================================================================== */
+function computeDishAnalytics() {
+  const byNorm = new Map();
+  const seenDateDish = new Set();
+
+  const currentWeekStartKey = formatDateToISO(getWeekStartDate(new Date(), state.startDayOfWeek));
+  const currentWeekDishesSet = new Set();
+
+  // Collect dishes already planned in the actual current week (or selected week)
+  [currentWeekStartKey, state.selectedWeekStartDate].forEach((wk) => {
+    const plan = state.plansByWeek && state.plansByWeek[wk];
+    if (!plan || !plan.days) return;
+    Object.values(plan.days).forEach((dayRaw) => {
+      const dayData = normalizeDayData(dayRaw);
+      dayData.dishes.forEach((d) => {
+        const norm = normalizeLookupName(d && d.title);
+        if (norm) currentWeekDishesSet.add(norm);
+      });
+    });
+  });
+
+  const registerOccurrence = (dish, dayDateStr) => {
+    if (!dish || typeof dish.title !== 'string') return;
+    const title = dish.title.trim();
+    if (!title) return;
+    const norm = normalizeLookupName(title);
+    if (!norm) return;
+
+    const dedupeKey = `${dayDateStr}::${norm}`;
+    if (seenDateDish.has(dedupeKey)) return;
+    seenDateDish.add(dedupeKey);
+
+    const rating = typeof dish.rating === 'number' ? dish.rating : 5;
+    const cleanIngredients = Array.isArray(dish.ingredients)
+      ? dish.ingredients
+          .filter((i) => i && typeof i.name === 'string' && i.name.trim() !== '')
+          .map((i) => ({ name: i.name.trim(), storeId: i.storeId || 'other' }))
+      : [];
+
+    let rec = byNorm.get(norm);
+    if (!rec) {
+      rec = {
+        key: makeCatalogKey(title),
+        title,
+        normalizedTitle: norm,
+        count: 0,
+        ratingSum: 0,
+        lastDate: dayDateStr,
+        lastMemo: dish.memo ? String(dish.memo).trim() : '',
+        lastRating: rating,
+        lastIngredients: cleanIngredients
+      };
+      byNorm.set(norm, rec);
+    }
+
+    rec.count += 1;
+    rec.ratingSum += rating;
+    if (!rec.lastDate || dayDateStr >= rec.lastDate) {
+      rec.lastDate = dayDateStr;
+      rec.title = title;
+      if (dish.memo && String(dish.memo).trim()) rec.lastMemo = String(dish.memo).trim();
+      rec.lastRating = rating;
+      if (cleanIngredients.length > 0) rec.lastIngredients = cleanIngredients;
+    }
+  };
+
+  // 1. Scan all saved weeks
+  Object.keys(state.plansByWeek || {}).forEach((weekKey) => {
+    const plan = state.plansByWeek[weekKey];
+    if (!plan || !plan.days) return;
+    const weekStart = parseISODate(plan.startDate || weekKey);
+    Object.keys(plan.days).forEach((dayKey) => {
+      const dayDateStr = formatDateToISO(getDayDateInWeek(weekStart, dayKey));
+      const dayData = normalizeDayData(plan.days[dayKey]);
+      dayData.dishes.forEach((dish) => registerOccurrence(dish, dayDateStr));
+    });
+  });
+
+  // 2. Scan all history archives (deduplicated by date + dish name)
+  (state.history || []).forEach((hist) => {
+    if (!hist || !hist.plan || !hist.plan.days) return;
+    const startStr = hist.startDate || hist.plan.startDate || formatDateToISO(new Date());
+    const weekStart = parseISODate(startStr);
+    Object.keys(hist.plan.days).forEach((dayKey) => {
+      const dayDateStr = formatDateToISO(getDayDateInWeek(weekStart, dayKey));
+      const dayData = normalizeDayData(hist.plan.days[dayKey]);
+      dayData.dishes.forEach((dish) => registerOccurrence(dish, dayDateStr));
+    });
+  });
+
+  // 3. Include catalog-only dishes (e.g. cleared from a week) so they stay discoverable
+  Object.values(state.dishCatalog || {}).forEach((cat) => {
+    if (!cat || !cat.title) return;
+    const norm = normalizeLookupName(cat.title);
+    if (!norm || byNorm.has(norm)) return;
+    byNorm.set(norm, {
+      key: cat.key || makeCatalogKey(cat.title),
+      title: cat.title,
+      normalizedTitle: norm,
+      count: Math.max(1, cat.count || 1),
+      ratingSum: (cat.lastRating || 5) * Math.max(1, cat.count || 1),
+      lastDate: cat.lastUsedAt || formatDateToISO(new Date()),
+      lastMemo: cat.lastMemo || '',
+      lastRating: cat.lastRating || 5,
+      lastIngredients: Array.isArray(cat.lastIngredients) ? cat.lastIngredients : []
+    });
+  });
+
+  const results = Array.from(byNorm.values()).map((rec) => {
+    const avgRating = rec.count > 0 ? Math.round((rec.ratingSum / rec.count) * 10) / 10 : 5;
+    const daysSinceLast = diffDaysFromToday(rec.lastDate);
+    return {
+      key: rec.key,
+      title: rec.title,
+      normalizedTitle: rec.normalizedTitle,
+      count: rec.count,
+      avgRating,
+      lastDate: rec.lastDate,
+      daysSinceLast,
+      inCurrentWeek: currentWeekDishesSet.has(rec.normalizedTitle),
+      lastMemo: rec.lastMemo,
+      lastRating: rec.lastRating,
+      lastIngredients: rec.lastIngredients
+    };
+  });
+
+  return results;
+}
+window.computeDishAnalytics = computeDishAnalytics;
+
+function getDishRanking({ sortBy = 'count', query = '' } = {}) {
+  const all = computeDishAnalytics();
+  const qHira = toHiragana(query);
+  const filtered = qHira
+    ? all.filter((item) => toHiragana(item.title).includes(qHira))
+    : all;
+
+  return filtered.sort((a, b) => {
+    if (sortBy === 'recent') {
+      if (a.lastDate !== b.lastDate) return String(b.lastDate).localeCompare(String(a.lastDate));
+      return b.count - a.count;
+    }
+    if (sortBy === 'rating') {
+      if (b.avgRating !== a.avgRating) return b.avgRating - a.avgRating;
+      return b.count - a.count;
+    }
+    // Default: count desc -> lastDate desc -> avgRating desc
+    if (b.count !== a.count) return b.count - a.count;
+    if (a.lastDate !== b.lastDate) return String(b.lastDate).localeCompare(String(a.lastDate));
+    return b.avgRating - a.avgRating;
+  });
+}
+
+function getOverdueDishSuggestions({ minDays = 14 } = {}) {
+  const all = computeDishAnalytics();
+  const candidates = all.filter((item) => !item.inCurrentWeek);
+
+  const scoreItem = (item) => (item.daysSinceLast * 1.5) + (item.count * 6) + (item.avgRating * 4);
+
+  const overdue = candidates
+    .filter((item) => item.daysSinceLast >= minDays)
+    .sort((a, b) => scoreItem(b) - scoreItem(a));
+
+  if (overdue.length > 0 || minDays === 0) {
+    return { items: overdue, isFallback: false };
+  }
+
+  // Fallback when user just started and all dishes were made within minDays
+  const fallback = [...candidates].sort((a, b) => {
+    if (b.daysSinceLast !== a.daysSinceLast) return b.daysSinceLast - a.daysSinceLast;
+    return scoreItem(b) - scoreItem(a);
+  });
+  return { items: fallback, isFallback: true };
+}
+
+function renderPlannerSuggestionsCard() {
+  const card = document.getElementById('planner-suggestions-card');
+  const body = document.getElementById('planner-suggestions-body');
+  const listEl = document.getElementById('planner-suggestions-list');
+  const badgeEl = document.getElementById('planner-suggestions-badge');
+  const toggleBtn = document.getElementById('toggle-suggestions-btn');
+  if (!card || !body || !listEl) return;
+
+  const { items, isFallback } = getOverdueDishSuggestions({ minDays: state.suggestionMinDays || 14 });
+  if (items.length === 0) {
+    card.style.display = 'none';
+    return;
+  }
+
+  card.style.display = 'block';
+  body.style.display = state.suggestionsCollapsed ? 'none' : 'block';
+  if (toggleBtn) {
+    toggleBtn.innerHTML = `<i data-lucide="${state.suggestionsCollapsed ? 'chevron-down' : 'chevron-up'}" style="width:12px;height:12px;"></i>`;
+  }
+  if (badgeEl) {
+    badgeEl.innerText = isFallback
+      ? '今週未登録からおすすめ'
+      : `${state.suggestionMinDays}日以上ごぶさた (${items.length}品)`;
+  }
+
+  const startIdx = items.length > 3 ? (state.suggestionShuffleOffset % items.length) : 0;
+  const picked = [];
+  for (let i = 0; i < Math.min(3, items.length); i++) {
+    picked.push(items[(startIdx + i) % items.length]);
+  }
+
+  listEl.innerHTML = picked.map((item) => `
+    <div class="suggestion-mini-row">
+      <div style="min-width:0;flex:1;">
+        <div style="font-weight:800;font-size:0.88rem;color:#372e2d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+          ${escapeHtml(item.title)}
+        </div>
+        <div style="font-size:0.74rem;color:var(--text-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px;">
+          <span class="overdue-days-pill">${item.daysSinceLast}日ぶり</span>
+          <span>採用 ${item.count}回</span>
+          <span style="color:#f59e0b;font-weight:700;">★${item.avgRating}</span>
+        </div>
+      </div>
+      <button type="button" class="btn btn-indigo btn-sm add-suggested-dish-btn" data-dish-key="${escapeHtml(item.key)}" style="font-size:0.74rem;padding:5px 10px;white-space:nowrap;">
+        <i data-lucide="plus" style="width:12px;height:12px;"></i> 今週に追加
+      </button>
+    </div>
+  `).join('');
+
+  listEl.querySelectorAll('.add-suggested-dish-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const dishKey = btn.getAttribute('data-dish-key');
+      const target = computeDishAnalytics().find((d) => d.key === dishKey);
+      if (target) openAddCatalogDishModal(target);
+    });
+  });
+}
+
+function switchHistorySubtab(subtabId) {
+  state.activeHistorySubtab = subtabId || 'archive';
+  document.querySelectorAll('.history-subtab').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-history-tab') === state.activeHistorySubtab);
+  });
+  document.querySelectorAll('.history-subpanel').forEach((panel) => {
+    panel.classList.toggle('active', panel.id === `history-panel-${state.activeHistorySubtab}`);
+  });
+  renderHistoryPage();
+}
+
 function renderHistoryPage() {
+  document.querySelectorAll('.history-subtab').forEach((btn) => {
+    btn.classList.toggle('active', btn.getAttribute('data-history-tab') === state.activeHistorySubtab);
+  });
+  document.querySelectorAll('.history-subpanel').forEach((panel) => {
+    panel.classList.toggle('active', panel.id === `history-panel-${state.activeHistorySubtab}`);
+  });
+
+  renderHistoryArchiveList();
+  renderHistoryRankingList();
+  renderHistorySuggestionsList();
+  if (window.lucide) window.lucide.createIcons();
+}
+
+function renderHistoryRankingList() {
+  const container = document.getElementById('history-ranking-container');
+  if (!container) return;
+
+  const ranking = getDishRanking({
+    sortBy: state.rankingSortBy || 'count',
+    query: state.rankingSearchQuery || ''
+  });
+
+  if (ranking.length === 0) {
+    container.innerHTML = `
+      <div style="text-align:center;padding:36px 16px;color:var(--text-muted);">
+        <i data-lucide="trophy" style="width:44px;height:44px;margin-bottom:10px;opacity:0.45;"></i>
+        <p>${state.rankingSearchQuery ? '該当するメニューが見つかりませんでした。' : '献立を登録すると採用回数ランキングが自動で集計されます。'}</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = ranking.map((item, idx) => {
+    const rankNum = idx + 1;
+    const rankClass = rankNum <= 3 ? `rank-${rankNum}` : '';
+    const ingPreview = (item.lastIngredients || []).slice(0, 3).map((i) => i.name).join('、');
+    return `
+      <div class="ranking-card" data-dish-key="${escapeHtml(item.key)}">
+        <div class="ranking-left">
+          <div class="rank-badge ${rankClass}">${rankNum}</div>
+          <div style="min-width:0;flex:1;">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+              <span class="ranking-dish-title" style="font-weight:800;font-size:0.95rem;color:#372e2d;">${escapeHtml(item.title)}</span>
+              <span class="ranking-count-pill">${item.count}回</span>
+            </div>
+            <div style="font-size:0.76rem;color:var(--text-muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;">
+              <span style="color:#f59e0b;font-weight:700;">★${item.avgRating}</span>
+              <span>前回: ${escapeHtml(item.lastDate)} (${item.daysSinceLast}日前)</span>
+            </div>
+            ${ingPreview ? `<div style="font-size:0.72rem;color:var(--text-subtle);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">主な食材: ${escapeHtml(ingPreview)}</div>` : ''}
+          </div>
+        </div>
+        <button type="button" class="btn btn-indigo btn-sm add-ranked-dish-btn" data-dish-key="${escapeHtml(item.key)}" style="font-size:0.74rem;padding:6px 10px;white-space:nowrap;">
+          <i data-lucide="plus" style="width:12px;height:12px;"></i> 今週に追加
+        </button>
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('.add-ranked-dish-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const dishKey = btn.getAttribute('data-dish-key');
+      const target = ranking.find((d) => d.key === dishKey);
+      if (target) openAddCatalogDishModal(target);
+    });
+  });
+}
+
+function renderHistorySuggestionsList() {
+  const container = document.getElementById('history-suggestions-container');
+  if (!container) return;
+
+  document.querySelectorAll('.suggestion-days-chip').forEach((chip) => {
+    chip.classList.toggle('active', parseInt(chip.getAttribute('data-days'), 10) === (state.suggestionMinDays || 0));
+  });
+
+  const { items, isFallback } = getOverdueDishSuggestions({ minDays: state.suggestionMinDays || 0 });
+
+  if (items.length === 0) {
+    container.innerHTML = `
+      <div style="text-align:center;padding:36px 16px;color:var(--text-muted);">
+        <i data-lucide="sparkles" style="width:44px;height:44px;margin-bottom:10px;opacity:0.45;"></i>
+        <p>提案できる未登録メニューがありません（すべての過去メニューが今週の献立に入っています）。</p>
+      </div>
+    `;
+    return;
+  }
+
+  const noticeHtml = isFallback
+    ? `<div style="font-size:0.8rem;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:12px;">${state.suggestionMinDays}日以上ごぶさたのメニューがまだないため、今週まだ入っていない過去メニューから提案しています。</div>`
+    : '';
+
+  container.innerHTML = noticeHtml + items.map((item) => `
+    <div class="ranking-card suggestion-card" data-dish-key="${escapeHtml(item.key)}">
+      <div style="min-width:0;flex:1;">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+          <span class="suggestion-dish-title" style="font-weight:800;font-size:0.95rem;color:#372e2d;">${escapeHtml(item.title)}</span>
+          <span class="overdue-days-pill">${item.daysSinceLast}日ぶり</span>
+        </div>
+        <div style="font-size:0.76rem;color:var(--text-muted);margin-top:3px;display:flex;gap:8px;flex-wrap:wrap;">
+          <span>これまで ${item.count}回採用</span>
+          <span style="color:#f59e0b;font-weight:700;">★${item.avgRating}</span>
+          <span>最終: ${escapeHtml(item.lastDate)}</span>
+        </div>
+      </div>
+      <button type="button" class="btn btn-indigo btn-sm add-suggested-dish-btn" data-dish-key="${escapeHtml(item.key)}" style="font-size:0.74rem;padding:6px 10px;white-space:nowrap;">
+        <i data-lucide="plus" style="width:12px;height:12px;"></i> 今週に追加
+      </button>
+    </div>
+  `).join('');
+
+  container.querySelectorAll('.add-suggested-dish-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const dishKey = btn.getAttribute('data-dish-key');
+      const target = items.find((d) => d.key === dishKey);
+      if (target) openAddCatalogDishModal(target);
+    });
+  });
+}
+
+function renderHistoryArchiveList() {
   const container = document.getElementById('history-list-container');
   if (!container) return;
 
@@ -1588,7 +2313,7 @@ function renderHistoryPage() {
     container.innerHTML = `
       <div style="text-align:center;padding:40px 16px;color:var(--text-muted);">
         <i data-lucide="archive" style="width:48px;height:48px;margin-bottom:12px;opacity:0.5;"></i>
-        <p>保存された献立の履歴はありません。「今週の献立を履歴に保存」を押すと記録されます。</p>
+        <p>保存された献立の履歴はありません。献立を編集・保存すると自動で記録されます。</p>
       </div>
     `;
     return;
@@ -1597,12 +2322,13 @@ function renderHistoryPage() {
   let html = '';
   state.history.forEach(hist => {
     const dateStr = formatDateRange(hist.startDate || hist.plan.startDate);
+    const autoBadge = hist.isAuto ? `<span class="auto-history-badge">自動保存</span>` : '';
     
     html += `
       <div class="history-card">
         <div class="history-header">
           <div>
-            <div class="history-date">${escapeHtml(hist.title || '過去のディナー献立')}</div>
+            <div class="history-date">${escapeHtml(hist.title || '過去のディナー献立')}${autoBadge}</div>
             <div style="font-size:0.8rem;color:var(--text-muted);">${dateStr}</div>
           </div>
           <div style="display:flex;gap:6px;">
@@ -1858,7 +2584,7 @@ function setupEventListeners() {
     });
   }
 
-  // Bulk clear weekly plan handler
+  // Clear all plan (do not overwrite auto-archive with empty week)
   const clearAllPlanBtn = document.getElementById('clear-all-plan-btn');
   if (clearAllPlanBtn) {
     clearAllPlanBtn.addEventListener('click', () => {
@@ -1875,9 +2601,87 @@ function setupEventListeners() {
             }]
           };
         });
-        state.saveLocal({ scope: 'weekFull', weekStartDate: state.selectedWeekStartDate });
+        state.saveLocal({ scope: 'weekFull', weekStartDate: state.selectedWeekStartDate, skipAutoArchive: true });
         renderApp();
         showToast('今週の献立と食材を一括クリアしました');
+      }
+    });
+  }
+
+  // Planner Suggestions Card controls
+  const shuffleSuggestionsBtn = document.getElementById('shuffle-suggestions-btn');
+  if (shuffleSuggestionsBtn) {
+    shuffleSuggestionsBtn.addEventListener('click', () => {
+      state.suggestionShuffleOffset = (state.suggestionShuffleOffset || 0) + 3;
+      renderPlannerSuggestionsCard();
+      initIcons();
+    });
+  }
+
+  const toggleSuggestionsBtn = document.getElementById('toggle-suggestions-btn');
+  if (toggleSuggestionsBtn) {
+    toggleSuggestionsBtn.addEventListener('click', () => {
+      state.suggestionsCollapsed = !state.suggestionsCollapsed;
+      localStorage.setItem('suggestions_collapsed', state.suggestionsCollapsed ? 'true' : 'false');
+      renderPlannerSuggestionsCard();
+      initIcons();
+    });
+  }
+
+  const openRankingFromPlannerBtn = document.getElementById('open-ranking-from-planner-btn');
+  if (openRankingFromPlannerBtn) {
+    openRankingFromPlannerBtn.addEventListener('click', () => {
+      state.activeHistorySubtab = 'ranking';
+      switchTab('history');
+    });
+  }
+
+  // History subtab controls
+  document.querySelectorAll('.history-subtab').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      switchHistorySubtab(btn.getAttribute('data-history-tab'));
+    });
+  });
+
+  const rankingSortSelect = document.getElementById('ranking-sort-select');
+  if (rankingSortSelect) {
+    rankingSortSelect.addEventListener('change', (e) => {
+      state.rankingSortBy = e.target.value;
+      renderHistoryRankingList();
+      initIcons();
+    });
+  }
+
+  const rankingSearchInput = document.getElementById('ranking-search-input');
+  if (rankingSearchInput) {
+    rankingSearchInput.addEventListener('input', (e) => {
+      state.rankingSearchQuery = e.target.value;
+      renderHistoryRankingList();
+      initIcons();
+    });
+  }
+
+  document.querySelectorAll('.suggestion-days-chip').forEach((chip) => {
+    chip.addEventListener('click', () => {
+      const days = parseInt(chip.getAttribute('data-days'), 10);
+      state.suggestionMinDays = isNaN(days) ? 14 : days;
+      renderHistorySuggestionsList();
+      renderPlannerSuggestionsCard();
+      initIcons();
+    });
+  });
+
+  // Attach autocomplete to extra shopping item input
+  const extraItemInput = document.getElementById('extra-item-name-input');
+  if (extraItemInput) {
+    attachAutocomplete(extraItemInput, {
+      getCandidates: (query) => getItemAutocompleteCandidates(query, 'extra'),
+      onSelect: (candidate) => {
+        extraItemInput.value = candidate.name;
+        const storeSelect = document.getElementById('extra-item-store-select');
+        if (storeSelect && candidate.lastStoreId && state.stores.some((s) => s.id === candidate.lastStoreId)) {
+          storeSelect.value = candidate.lastStoreId;
+        }
       }
     });
   }
@@ -2167,6 +2971,8 @@ function setupEventListeners() {
         }
         state.applyRemoteExtraItems(snapshot.extraShoppingItems || []);
         state.applyRemoteHistory(snapshot.history || []);
+        if (snapshot.dishCatalog) state.applyRemoteDishCatalog(snapshot.dishCatalog);
+        if (snapshot.itemCatalog) state.applyRemoteItemCatalog(snapshot.itemCatalog);
         updateSyncStatusUI('realtime', 'クラウド同期中');
         showToast('Google Cloud 共有DB から最新データを再取得しました！');
       } catch (err) {
@@ -2427,8 +3233,10 @@ function copyDayMenu(sourceDayKey, targetDayKey) {
 
 let pendingCopyHistId = null;
 let pendingCopyHistDayKey = null;
+let pendingCatalogDishToAdd = null;
 
 function openCopyHistoryDayModal(histId, dayKey) {
+  pendingCatalogDishToAdd = null;
   pendingCopyHistId = histId;
   pendingCopyHistDayKey = dayKey;
 
@@ -2442,9 +3250,11 @@ function openCopyHistoryDayModal(histId, dayKey) {
   const dishTitleStr = validDishes.map(d => d.title.trim()).join(' / ') || '献立なし';
 
   const modal = document.getElementById('copy-history-day-modal');
+  const titleEl = document.getElementById('copy-hist-modal-title');
   const infoEl = document.getElementById('copy-hist-source-info');
   const targetSelect = document.getElementById('target-copy-hist-day-select');
 
+  if (titleEl) titleEl.innerText = '履歴献立を今週にコピー';
   if (infoEl) {
     infoEl.innerText = `コピー元: 履歴「${targetHist.title || '過去の献立'}」の${dayInfo.label} (${dishTitleStr})`;
   }
@@ -2452,6 +3262,65 @@ function openCopyHistoryDayModal(histId, dayKey) {
     targetSelect.value = dayKey;
   }
   if (modal) modal.classList.add('active');
+}
+
+function openAddCatalogDishModal(dishInfo) {
+  if (!dishInfo || !dishInfo.title) return;
+  pendingCopyHistId = null;
+  pendingCopyHistDayKey = null;
+  pendingCatalogDishToAdd = dishInfo;
+
+  const modal = document.getElementById('copy-history-day-modal');
+  const titleEl = document.getElementById('copy-hist-modal-title');
+  const infoEl = document.getElementById('copy-hist-source-info');
+  const targetSelect = document.getElementById('target-copy-hist-day-select');
+
+  const ingCount = Array.isArray(dishInfo.lastIngredients) ? dishInfo.lastIngredients.length : 0;
+  if (titleEl) titleEl.innerText = 'メニューを今週の献立に追加';
+  if (infoEl) {
+    infoEl.innerText = `追加メニュー: ${dishInfo.title}（採用 ${dishInfo.count || 1}回 / 食材 ${ingCount}品）`;
+  }
+  if (targetSelect) {
+    const jsDayToKey = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+    targetSelect.value = jsDayToKey[new Date().getDay()] || 'mon';
+  }
+  if (modal) modal.classList.add('active');
+}
+
+function addCatalogDishToCurrentWeek(dishInfo, targetDayKey, mode = 'append') {
+  if (!dishInfo || !dishInfo.title || !targetDayKey) return;
+
+  const newDish = {
+    id: 'dish_cat_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
+    title: dishInfo.title,
+    rating: typeof dishInfo.lastRating === 'number' ? dishInfo.lastRating : 5,
+    memo: dishInfo.lastMemo || '',
+    dayKey: targetDayKey,
+    ingredients: (Array.isArray(dishInfo.lastIngredients) ? dishInfo.lastIngredients : []).map((ing, iIdx) => ({
+      id: 'ing_cat_' + Date.now() + '_' + iIdx + '_' + Math.random().toString(36).substr(2, 4),
+      name: ing.name || '',
+      storeId: ing.storeId || 'other',
+      checked: false
+    }))
+  };
+
+  const existingTargetData = normalizeDayData(state.currentPlan.days[targetDayKey]);
+  if (mode === 'replace') {
+    existingTargetData.dishes = [newDish];
+  } else {
+    const existingValid = existingTargetData.dishes.filter(
+      (d) => d.title.trim() !== '' || (d.ingredients && d.ingredients.length > 0) || d.memo.trim() !== ''
+    );
+    existingTargetData.dishes = [...existingValid, newDish];
+  }
+
+  state.currentPlan.days[targetDayKey] = existingTargetData;
+  state.saveLocal({ scope: 'weekDay', weekStartDate: state.selectedWeekStartDate, dayKey: targetDayKey });
+
+  const targetDayInfo = DAYS_OF_WEEK_BASE.find((d) => d.key === targetDayKey) || { label: targetDayKey };
+  renderApp();
+  switchTab('planner');
+  showToast(`「${dishInfo.title}」を今週の「${targetDayInfo.label}」に追加しました！✨`);
 }
 
 function copyHistoryDayMenu(histId, dayKey, targetDayKey, mode = 'append') {
@@ -2621,6 +3490,37 @@ function renderModalDishesList() {
         state.editingDayData.dishes[dIdx].title = e.target.value;
       }
     });
+
+    attachAutocomplete(input, {
+      getCandidates: (query) => getDishAutocompleteCandidates(query),
+      onSelect: (candidate) => {
+        const dIdx = parseInt(input.getAttribute('data-dish-idx'));
+        const targetDish = state.editingDayData && state.editingDayData.dishes[dIdx];
+        if (!targetDish) return;
+        targetDish.title = candidate.title;
+        input.value = candidate.title;
+
+        // Auto-fill ingredients, memo & rating only if ingredients are currently empty
+        const hasExistingIngs = Array.isArray(targetDish.ingredients) &&
+          targetDish.ingredients.some((i) => i && i.name && i.name.trim() !== '');
+        if (!hasExistingIngs && Array.isArray(candidate.lastIngredients) && candidate.lastIngredients.length > 0) {
+          targetDish.ingredients = candidate.lastIngredients.map((ing, iIdx) => ({
+            id: 'ing_ac_' + Date.now() + '_' + iIdx + '_' + Math.random().toString(36).substr(2, 4),
+            name: ing.name,
+            storeId: state.stores.some((s) => s.id === ing.storeId) ? ing.storeId : defaultStoreId,
+            checked: false
+          }));
+          if (!targetDish.memo && candidate.lastMemo) {
+            targetDish.memo = candidate.lastMemo;
+          }
+          if (typeof candidate.lastRating === 'number') {
+            targetDish.rating = candidate.lastRating;
+          }
+          renderModalDishesList();
+          showToast(`「${candidate.title}」の前回食材（${targetDish.ingredients.length}品）も自動入力しました ✨`);
+        }
+      }
+    });
   });
 
   container.querySelectorAll('.dish-memo-input').forEach(input => {
@@ -2649,6 +3549,24 @@ function renderModalDishesList() {
       const iIdx = parseInt(input.getAttribute('data-ing-idx'));
       if (state.editingDayData.dishes[dIdx] && state.editingDayData.dishes[dIdx].ingredients[iIdx]) {
         state.editingDayData.dishes[dIdx].ingredients[iIdx].name = e.target.value;
+      }
+    });
+
+    attachAutocomplete(input, {
+      getCandidates: (query) => getItemAutocompleteCandidates(query, 'ingredient'),
+      onSelect: (candidate) => {
+        const dIdx = parseInt(input.getAttribute('data-dish-idx'));
+        const iIdx = parseInt(input.getAttribute('data-ing-idx'));
+        if (state.editingDayData.dishes[dIdx] && state.editingDayData.dishes[dIdx].ingredients[iIdx]) {
+          state.editingDayData.dishes[dIdx].ingredients[iIdx].name = candidate.name;
+          input.value = candidate.name;
+          if (candidate.lastStoreId && state.stores.some((s) => s.id === candidate.lastStoreId)) {
+            state.editingDayData.dishes[dIdx].ingredients[iIdx].storeId = candidate.lastStoreId;
+            const row = input.closest('.form-group');
+            const storeSelect = row ? row.querySelector('.ing-store-select') : null;
+            if (storeSelect) storeSelect.value = candidate.lastStoreId;
+          }
+        }
       }
     });
   });
@@ -2905,17 +3823,261 @@ function setupModalHandlers() {
 
   if (confirmCopyHistBtn) {
     confirmCopyHistBtn.addEventListener('click', () => {
-      if (pendingCopyHistId && pendingCopyHistDayKey) {
-        const targetSelect = document.getElementById('target-copy-hist-day-select');
-        const modeSelect = document.getElementById('copy-hist-mode-select');
-        const targetDayKey = targetSelect ? targetSelect.value : 'mon';
-        const mode = modeSelect ? modeSelect.value : 'append';
+      const targetSelect = document.getElementById('target-copy-hist-day-select');
+      const modeSelect = document.getElementById('copy-hist-mode-select');
+      const targetDayKey = targetSelect ? targetSelect.value : 'mon';
+      const mode = modeSelect ? modeSelect.value : 'append';
+
+      if (pendingCatalogDishToAdd) {
+        addCatalogDishToCurrentWeek(pendingCatalogDishToAdd, targetDayKey, mode);
+        pendingCatalogDishToAdd = null;
+        closeCopyHistModal();
+      } else if (pendingCopyHistId && pendingCopyHistDayKey) {
         copyHistoryDayMenu(pendingCopyHistId, pendingCopyHistDayKey, targetDayKey, mode);
         closeCopyHistModal();
       }
     });
   }
 }
+
+/* ==========================================================================
+   5. Custom Autocomplete Engine (Dish Names & Item/Ingredient Names)
+   ========================================================================== */
+let activeAutocompleteState = null;
+
+function getDishAutocompleteCandidates(query) {
+  const analytics = computeDishAnalytics();
+  const qHira = toHiragana(query);
+
+  const scored = [];
+  analytics.forEach((item) => {
+    const hira = toHiragana(item.title);
+    let matchRank = 0;
+    if (!qHira) {
+      matchRank = 1;
+    } else if (hira.startsWith(qHira)) {
+      matchRank = 3;
+    } else if (hira.includes(qHira)) {
+      matchRank = 2;
+    }
+    if (matchRank > 0) {
+      scored.push({
+        type: 'dish',
+        matchRank,
+        title: item.title,
+        subtitle: `採用 ${item.count}回・前回 ${item.lastDate} (${item.daysSinceLast}日前)${item.lastIngredients.length > 0 ? `・食材${item.lastIngredients.length}品` : ''}`,
+        badgeText: `★${item.avgRating}`,
+        badgeColor: '#f59e0b',
+        count: item.count,
+        lastDate: item.lastDate,
+        lastMemo: item.lastMemo,
+        lastRating: item.lastRating,
+        lastIngredients: item.lastIngredients
+      });
+    }
+  });
+
+  scored.sort((a, b) => {
+    if (b.matchRank !== a.matchRank) return b.matchRank - a.matchRank;
+    if (b.count !== a.count) return b.count - a.count;
+    return String(b.lastDate || '').localeCompare(String(a.lastDate || ''));
+  });
+
+  return scored.slice(0, 8);
+}
+
+function getItemAutocompleteCandidates(query, preferredKind = 'ingredient') {
+  const entries = Object.values(state.itemCatalog || {});
+  const qHira = toHiragana(query);
+
+  const scored = [];
+  entries.forEach((item) => {
+    if (!item || !item.name) return;
+    const hira = toHiragana(item.name);
+    let matchRank = 0;
+    if (!qHira) {
+      matchRank = 1;
+    } else if (hira.startsWith(qHira)) {
+      matchRank = 3;
+    } else if (hira.includes(qHira)) {
+      matchRank = 2;
+    }
+    if (matchRank > 0) {
+      const store = (state.stores || []).find((s) => s.id === item.lastStoreId) || { name: 'その他', color: '#64748b' };
+      const kindBonus = (item.kind === preferredKind || item.kind === 'both') ? 1 : 0;
+      scored.push({
+        type: 'item',
+        matchRank,
+        kindBonus,
+        name: item.name,
+        title: item.name,
+        subtitle: `使用 ${item.count || 1}回`,
+        badgeText: store.name,
+        badgeColor: store.color || '#64748b',
+        lastStoreId: item.lastStoreId || 'other',
+        count: item.count || 1,
+        lastUsedAt: item.lastUsedAt || ''
+      });
+    }
+  });
+
+  scored.sort((a, b) => {
+    if (b.matchRank !== a.matchRank) return b.matchRank - a.matchRank;
+    if (b.kindBonus !== a.kindBonus) return b.kindBonus - a.kindBonus;
+    if (b.count !== a.count) return b.count - a.count;
+    return String(b.lastUsedAt).localeCompare(String(a.lastUsedAt));
+  });
+
+  return scored.slice(0, 8);
+}
+
+function hideAutocompleteDropdown() {
+  const dd = document.getElementById('autocomplete-dropdown');
+  if (dd) {
+    dd.classList.remove('open');
+    dd.innerHTML = '';
+  }
+  activeAutocompleteState = null;
+}
+
+function positionAutocompleteDropdown(inputEl) {
+  const dd = document.getElementById('autocomplete-dropdown');
+  if (!dd || !inputEl) return;
+  const rect = inputEl.getBoundingClientRect();
+  const viewportH = window.innerHeight || 700;
+  const spaceBelow = viewportH - rect.bottom;
+  const maxHeight = Math.min(260, Math.max(120, spaceBelow - 16));
+
+  dd.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - Math.max(rect.width, 220) - 8))}px`;
+  dd.style.width = `${Math.max(rect.width, 220)}px`;
+
+  if (spaceBelow < 150 && rect.top > 180) {
+    dd.style.top = 'auto';
+    dd.style.bottom = `${viewportH - rect.top + 4}px`;
+    dd.style.maxHeight = `${Math.min(240, rect.top - 16)}px`;
+  } else {
+    dd.style.bottom = 'auto';
+    dd.style.top = `${rect.bottom + 4}px`;
+    dd.style.maxHeight = `${maxHeight}px`;
+  }
+}
+
+function showAutocompleteDropdown(inputEl, candidates, onSelect) {
+  const dd = document.getElementById('autocomplete-dropdown');
+  if (!dd) return;
+
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    hideAutocompleteDropdown();
+    return;
+  }
+
+  activeAutocompleteState = {
+    inputEl,
+    candidates,
+    onSelect,
+    activeIndex: -1
+  };
+
+  dd.innerHTML = candidates.map((c, idx) => `
+    <div class="autocomplete-item" role="option" data-ac-idx="${idx}">
+      <div class="autocomplete-item-main">
+        <div class="autocomplete-item-title">${escapeHtml(c.title)}</div>
+        ${c.subtitle ? `<div class="autocomplete-item-sub">${escapeHtml(c.subtitle)}</div>` : ''}
+      </div>
+      ${c.badgeText ? `<div class="autocomplete-item-meta"><span class="store-tag" style="background-color:${escapeHtml(c.badgeColor || '#64748b')};">${escapeHtml(c.badgeText)}</span></div>` : ''}
+    </div>
+  `).join('');
+
+  dd.querySelectorAll('.autocomplete-item').forEach((row) => {
+    const selectHandler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = parseInt(row.getAttribute('data-ac-idx'), 10);
+      const chosen = candidates[idx];
+      if (chosen && typeof onSelect === 'function') {
+        hideAutocompleteDropdown();
+        onSelect(chosen);
+      }
+    };
+    row.addEventListener('pointerdown', selectHandler);
+  });
+
+  positionAutocompleteDropdown(inputEl);
+  dd.classList.add('open');
+}
+
+function attachAutocomplete(inputEl, { getCandidates, onSelect }) {
+  if (!inputEl || inputEl.dataset.acAttached === 'true') return;
+  inputEl.dataset.acAttached = 'true';
+  inputEl.setAttribute('autocomplete', 'off');
+
+  let isComposing = false;
+
+  const refresh = () => {
+    if (isComposing) return;
+    const candidates = getCandidates(inputEl.value || '');
+    showAutocompleteDropdown(inputEl, candidates, onSelect);
+  };
+
+  inputEl.addEventListener('compositionstart', () => { isComposing = true; });
+  inputEl.addEventListener('compositionend', () => {
+    isComposing = false;
+    refresh();
+  });
+
+  inputEl.addEventListener('focus', refresh);
+  inputEl.addEventListener('input', refresh);
+
+  inputEl.addEventListener('keydown', (e) => {
+    if (!activeAutocompleteState || activeAutocompleteState.inputEl !== inputEl) return;
+    const dd = document.getElementById('autocomplete-dropdown');
+    if (!dd || !dd.classList.contains('open')) return;
+
+    const { candidates } = activeAutocompleteState;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeAutocompleteState.activeIndex = (activeAutocompleteState.activeIndex + 1) % candidates.length;
+      dd.querySelectorAll('.autocomplete-item').forEach((el, i) => {
+        el.classList.toggle('active', i === activeAutocompleteState.activeIndex);
+      });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeAutocompleteState.activeIndex = (activeAutocompleteState.activeIndex - 1 + candidates.length) % candidates.length;
+      dd.querySelectorAll('.autocomplete-item').forEach((el, i) => {
+        el.classList.toggle('active', i === activeAutocompleteState.activeIndex);
+      });
+    } else if (e.key === 'Enter' && activeAutocompleteState.activeIndex >= 0) {
+      e.preventDefault();
+      const chosen = candidates[activeAutocompleteState.activeIndex];
+      if (chosen) {
+        hideAutocompleteDropdown();
+        onSelect(chosen);
+      }
+    } else if (e.key === 'Escape') {
+      hideAutocompleteDropdown();
+    }
+  });
+
+  inputEl.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (activeAutocompleteState && activeAutocompleteState.inputEl === inputEl) {
+        hideAutocompleteDropdown();
+      }
+    }, 180);
+  });
+}
+
+window.addEventListener('scroll', () => {
+  if (activeAutocompleteState && activeAutocompleteState.inputEl) {
+    positionAutocompleteDropdown(activeAutocompleteState.inputEl);
+  }
+}, true);
+
+window.addEventListener('resize', () => {
+  if (activeAutocompleteState && activeAutocompleteState.inputEl) {
+    positionAutocompleteDropdown(activeAutocompleteState.inputEl);
+  }
+});
 
 function escapeHtml(str) {
   if (!str) return '';

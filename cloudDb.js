@@ -447,6 +447,16 @@ export class CloudDatabaseSync {
     return fsMod.doc(this.db, 'households', this.householdId, 'history', histId);
   }
 
+  _dishCatalogDocRef() {
+    const { fsMod } = this.sdk;
+    return fsMod.doc(this.db, 'households', this.householdId, 'catalog', 'dishes');
+  }
+
+  _itemCatalogDocRef() {
+    const { fsMod } = this.sdk;
+    return fsMod.doc(this.db, 'households', this.householdId, 'catalog', 'items');
+  }
+
   /**
    * Check whether the shared household already has any data in Cloud Firestore.
    */
@@ -605,6 +615,7 @@ export class CloudDatabaseSync {
       title: hist.title || '過去の献立',
       startDate: hist.startDate || '',
       savedAt: hist.savedAt || new Date().toISOString(),
+      isAuto: Boolean(hist.isAuto),
       plan: hist.plan || {},
       ...this._auditFields()
     });
@@ -618,6 +629,40 @@ export class CloudDatabaseSync {
     if (!histId) return;
     const { fsMod } = this.sdk;
     await fsMod.deleteDoc(this._historyDocRef(histId));
+    this.lastSyncAt = new Date().toISOString();
+  }
+
+  /**
+   * Merge dish catalog entries (keyed by deterministic safe key) so concurrent edits never collide.
+   */
+  async mergeDishCatalogEntries(entriesMap) {
+    this._ensureReady();
+    if (!entriesMap || typeof entriesMap !== 'object' || Object.keys(entriesMap).length === 0) return;
+    const { fsMod } = this.sdk;
+
+    const payload = stripUndefined({
+      entries: entriesMap,
+      ...this._auditFields()
+    });
+
+    await fsMod.setDoc(this._dishCatalogDocRef(), payload, { merge: true });
+    this.lastSyncAt = new Date().toISOString();
+  }
+
+  /**
+   * Merge item (ingredient / extra item) catalog entries.
+   */
+  async mergeItemCatalogEntries(entriesMap) {
+    this._ensureReady();
+    if (!entriesMap || typeof entriesMap !== 'object' || Object.keys(entriesMap).length === 0) return;
+    const { fsMod } = this.sdk;
+
+    const payload = stripUndefined({
+      entries: entriesMap,
+      ...this._auditFields()
+    });
+
+    await fsMod.setDoc(this._itemCatalogDocRef(), payload, { merge: true });
     this.lastSyncAt = new Date().toISOString();
   }
 
@@ -714,11 +759,36 @@ export class CloudDatabaseSync {
           title: hist.title || '過去の献立',
           startDate: hist.startDate || '',
           savedAt: hist.savedAt || new Date().toISOString(),
+          isAuto: Boolean(hist.isAuto),
           plan: hist.plan || {},
           ...audit
         })
       });
     });
+
+    // 5. Catalogs (dishes & items dictionaries for autocomplete/analytics)
+    if (exportedData.dishCatalog && typeof exportedData.dishCatalog === 'object' && Object.keys(exportedData.dishCatalog).length > 0) {
+      ops.push({
+        type: 'set',
+        ref: this._dishCatalogDocRef(),
+        data: stripUndefined({
+          entries: exportedData.dishCatalog,
+          ...audit
+        }),
+        options: { merge: true }
+      });
+    }
+    if (exportedData.itemCatalog && typeof exportedData.itemCatalog === 'object' && Object.keys(exportedData.itemCatalog).length > 0) {
+      ops.push({
+        type: 'set',
+        ref: this._itemCatalogDocRef(),
+        data: stripUndefined({
+          entries: exportedData.itemCatalog,
+          ...audit
+        }),
+        options: { merge: true }
+      });
+    }
 
     // Execute in 400-op chunks
     const CHUNK_SIZE = 400;
@@ -747,11 +817,13 @@ export class CloudDatabaseSync {
     this._ensureReady();
     const { fsMod } = this.sdk;
     try {
-      const [metaSnap, weeksSnap, extraSnap, histSnap] = await Promise.all([
+      const [metaSnap, weeksSnap, extraSnap, histSnap, dishCatSnap, itemCatSnap] = await Promise.all([
         fsMod.getDoc(this._metaDocRef()),
         fsMod.getDocs(this._weeksColRef()),
         fsMod.getDocs(this._extraItemsColRef()),
-        fsMod.getDocs(this._historyColRef())
+        fsMod.getDocs(this._historyColRef()),
+        fsMod.getDoc(this._dishCatalogDocRef()),
+        fsMod.getDoc(this._itemCatalogDocRef())
       ]);
 
       const meta = metaSnap.exists() ? metaSnap.data() : {};
@@ -772,6 +844,9 @@ export class CloudDatabaseSync {
       });
       history.sort((a, b) => String(b.savedAt || '').localeCompare(String(a.savedAt || '')));
 
+      const dishCatalog = (dishCatSnap.exists() && dishCatSnap.data().entries) ? dishCatSnap.data().entries : {};
+      const itemCatalog = (itemCatSnap.exists() && itemCatSnap.data().entries) ? itemCatSnap.data().entries : {};
+
       return {
         householdId: this.householdId,
         fetchedAt: new Date().toISOString(),
@@ -779,7 +854,9 @@ export class CloudDatabaseSync {
         stores: meta.stores,
         plansByWeek,
         extraShoppingItems,
-        history
+        history,
+        dishCatalog,
+        itemCatalog
       };
     } catch (err) {
       throw this.formatFirestoreError(err);
@@ -877,7 +954,39 @@ export class CloudDatabaseSync {
       handleError
     );
 
-    this.unsubscribers = [unsubMeta, unsubWeeks, unsubExtra, unsubHistory];
+    // 5. Dish catalog listener
+    const unsubDishCatalog = fsMod.onSnapshot(
+      this._dishCatalogDocRef(),
+      (docSnap) => {
+        this.lastSyncAt = new Date().toISOString();
+        if (docSnap.exists() && handlers.onDishCatalogUpdate) {
+          const data = docSnap.data();
+          handlers.onDishCatalogUpdate((data && data.entries) ? data.entries : {}, {
+            fromCache: docSnap.metadata.fromCache,
+            hasPendingWrites: docSnap.metadata.hasPendingWrites
+          });
+        }
+      },
+      handleError
+    );
+
+    // 6. Item catalog listener
+    const unsubItemCatalog = fsMod.onSnapshot(
+      this._itemCatalogDocRef(),
+      (docSnap) => {
+        this.lastSyncAt = new Date().toISOString();
+        if (docSnap.exists() && handlers.onItemCatalogUpdate) {
+          const data = docSnap.data();
+          handlers.onItemCatalogUpdate((data && data.entries) ? data.entries : {}, {
+            fromCache: docSnap.metadata.fromCache,
+            hasPendingWrites: docSnap.metadata.hasPendingWrites
+          });
+        }
+      },
+      handleError
+    );
+
+    this.unsubscribers = [unsubMeta, unsubWeeks, unsubExtra, unsubHistory, unsubDishCatalog, unsubItemCatalog];
     this.isSubscribed = true;
   }
 

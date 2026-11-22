@@ -63,7 +63,7 @@ server.listen(8080, async () => {
     // SECTION 1: SYSTEM INITIALIZATION & VERSION VERIFICATION
     console.log('--- 1. SYSTEM INITIALIZATION & VERSION ---');
     const versionText = await page.locator('.version-badge').innerText();
-    assertTest('App Version Badge', versionText === 'v3.0.1', `Version = ${versionText}`);
+    assertTest('App Version Badge', versionText === 'v3.1.0', `Version = ${versionText}`);
     assertTest('Uncaught JS Page Errors', pageErrors.length === 0, `Error count = ${pageErrors.length}`);
 
     const plannerCardsCount = await page.locator('.dinner-card').count();
@@ -481,6 +481,153 @@ server.listen(8080, async () => {
 
     assertTest('Sequential Move Action: Tuesday returns to 1 Dish Card', tueDishCountAfterSecondMove === 1);
     assertTest('Sequential Move Action: Wednesday receives Curry Dish', wedCurryCount > 0);
+
+
+    // SECTION 9.5: AUTO HISTORY ARCHIVE, AUTOCOMPLETE, RANKING & OVERDUE SUGGESTIONS SUITE
+    console.log('\n--- 9.5. AUTO HISTORY, AUTOCOMPLETE, RANKING & SUGGESTIONS SUITE ---');
+
+    // Test 9.5.1: Auto-archive on dish edit without pressing "Save to History" (and no duplicate entries)
+    await page.click('.dinner-card[data-day="thu"] .add-dish-btn');
+    await page.waitForTimeout(200);
+    await page.fill('#edit-day-modal .dish-title-input', '自家製オムライス');
+    // Clear existing ingredients and add 1 known ingredient
+    await page.click('#edit-day-modal .clear-dish-ings-btn');
+    await page.waitForTimeout(100);
+    await page.click('#edit-day-modal .add-dish-ing-btn');
+    await page.waitForTimeout(100);
+    await page.fill('#edit-day-modal .ing-name-input', 'こだわりの卵 6個');
+    await page.selectOption('#edit-day-modal .ing-store-select', 'aeon');
+    await page.click('#save-modal-btn');
+    await page.waitForTimeout(250);
+
+    // Edit again on same week to verify auto-archive updates in place without duplicating
+    await page.click('.dinner-card[data-day="thu"] .add-dish-btn');
+    await page.waitForTimeout(200);
+    await page.fill('#edit-day-modal .dish-memo-input', 'ケチャップたっぷり');
+    await page.click('#save-modal-btn');
+    await page.waitForTimeout(250);
+
+    const autoArchiveCheck = await page.evaluate(() => {
+      const wk = window.state.selectedWeekStartDate;
+      const autoId = `auto_${wk}`;
+      const matches = (window.state.history || []).filter(h => h && h.id === autoId);
+      const hasOmelette = matches.length === 1 &&
+        JSON.stringify(matches[0].plan.days.thu).includes('自家製オムライス');
+      return { count: matches.length, hasOmelette };
+    });
+    assertTest('Auto History Archive Created & Updated Without Duplication', autoArchiveCheck.count === 1 && autoArchiveCheck.hasOmelette, `Auto Entries = ${autoArchiveCheck.count}`);
+
+    // Test 9.5.2: Extra item persists in itemCatalog even after deleting from active memo list, and autocompletes with hiragana + store auto-select
+    await page.selectOption('#extra-item-store-select', 'life');
+    await page.fill('#extra-item-name-input', 'キッチンペーパー');
+    await page.click('#add-extra-item-form button[type="submit"]');
+    await page.waitForTimeout(200);
+    await page.click('#clear-extra-items-btn');
+    await page.waitForTimeout(200);
+
+    // Type hiragana "きっちん" into extra item input and pick autocomplete candidate
+    await page.selectOption('#extra-item-store-select', 'other');
+    await page.focus('#extra-item-name-input');
+    await page.fill('#extra-item-name-input', 'きっちん');
+    await page.waitForTimeout(200);
+    const acItemVisible = await page.locator('#autocomplete-dropdown.open .autocomplete-item:has-text("キッチンペーパー")').isVisible();
+    assertTest('Extra Item Autocomplete Shows Persisted History with Hiragana Query', acItemVisible);
+
+    await page.locator('#autocomplete-dropdown.open .autocomplete-item:has-text("キッチンペーパー")').first().dispatchEvent('pointerdown');
+    await page.waitForTimeout(200);
+    const acExtraInputVal = await page.locator('#extra-item-name-input').inputValue();
+    const acExtraStoreVal = await page.locator('#extra-item-store-select').inputValue();
+    assertTest('Extra Item Autocomplete Fills Name & Auto-Selects Previous Store', acExtraInputVal === 'キッチンペーパー' && acExtraStoreVal === 'life', `Name=${acExtraInputVal}, Store=${acExtraStoreVal}`);
+
+    // Test 9.5.3: Dish title autocomplete with hiragana query auto-fills previous ingredients when empty
+    await page.click('.dinner-card[data-day="sat"] .add-dish-btn');
+    await page.waitForTimeout(200);
+    await page.click('#edit-day-modal .clear-dish-ings-btn');
+    await page.waitForTimeout(100);
+    await page.focus('#edit-day-modal .dish-title-input');
+    await page.fill('#edit-day-modal .dish-title-input', 'おむらいす');
+    await page.waitForTimeout(200);
+    const acDishVisible = await page.locator('#autocomplete-dropdown.open .autocomplete-item:has-text("自家製オムライス")').isVisible();
+    assertTest('Dish Title Autocomplete Matches Hiragana Query', acDishVisible);
+
+    await page.locator('#autocomplete-dropdown.open .autocomplete-item:has-text("自家製オムライス")').first().dispatchEvent('pointerdown');
+    await page.waitForTimeout(250);
+    const autoFilledDishTitle = await page.locator('#edit-day-modal .dish-title-input').inputValue();
+    const autoFilledIngVal = await page.locator('#edit-day-modal .ing-name-input').first().inputValue();
+    assertTest('Dish Autocomplete Auto-Fills Previous Ingredients When Empty', autoFilledDishTitle === '自家製オムライス' && autoFilledIngVal === 'こだわりの卵 6個', `Title=${autoFilledDishTitle}, Ing=${autoFilledIngVal}`);
+    await page.click('#close-modal-btn');
+    await page.waitForTimeout(200);
+
+    // Test 9.5.4: Ranking deduplication & Overdue suggestions
+    await page.evaluate(() => {
+      const makePastIso = (daysAgo) => {
+        const d = new Date();
+        d.setDate(d.getDate() - daysAgo);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+      };
+      const w1 = makePastIso(21);
+      const w2 = makePastIso(35);
+      const w3 = makePastIso(49);
+      const makeNikujagaWeek = (startStr) => ({
+        id: `plan_${startStr}`,
+        startDate: startStr,
+        days: {
+          mon: { dishes: [{ id: `d_${startStr}`, title: '特製肉じゃが', rating: 5, memo: '定番おかず', ingredients: [{ id: `i_${startStr}`, name: 'じゃがいも 4個', storeId: 'greengrocer', checked: false }] }] }
+        }
+      });
+      window.state.plansByWeek[w1] = makeNikujagaWeek(w1);
+      window.state.plansByWeek[w2] = makeNikujagaWeek(w2);
+      window.state.plansByWeek[w3] = makeNikujagaWeek(w3);
+      // Add duplicate manual history entry for w1 to verify deduplication (count must stay 3, not 4!)
+      window.state.history.push({
+        id: 'hist_dup_test',
+        title: '重複確認テスト履歴',
+        startDate: w1,
+        savedAt: new Date().toISOString(),
+        plan: makeNikujagaWeek(w1)
+      });
+      window.state.seedCatalogFromExistingData();
+      window.state.saveLocal(true);
+      window.renderApp();
+    });
+    await page.waitForTimeout(250);
+
+    // Check planner compact suggestions card shows overdue dish (特製肉じゃが) and excludes current-week dish (自家製オムライス)
+    const plannerSuggText = await page.locator('#planner-suggestions-list').innerText();
+    assertTest('Planner Overdue Suggestion Card Shows Unmade Dish (特製肉じゃが) & Excludes Current Week Dish', plannerSuggText.includes('特製肉じゃが') && !plannerSuggText.includes('自家製オムライス'));
+
+    // Check History -> Ranking subtab
+    await page.click('[data-tab="history"]');
+    await page.waitForTimeout(200);
+    await page.click('.history-subtab[data-history-tab="ranking"]');
+    await page.waitForTimeout(200);
+
+    const topRankRowText = await page.locator('#history-ranking-container .ranking-card').first().innerText();
+    assertTest('Dish Adoption Ranking Deduplicates & Ranks Top Dish (特製肉じゃが 3回)', topRankRowText.includes('特製肉じゃが') && topRankRowText.includes('3回'), `Top = ${topRankRowText.replace(/\n/g, ' ')}`);
+
+    // Check History -> Suggestions subtab & add overdue dish to current week Friday
+    await page.click('.history-subtab[data-history-tab="suggestions"]');
+    await page.waitForTimeout(200);
+    const suggTabHasNikujaga = await page.locator('#history-suggestions-container .suggestion-card:has-text("特製肉じゃが")').isVisible();
+    assertTest('History Overdue Suggestions Tab Displays Overdue Dish', suggTabHasNikujaga);
+
+    await page.locator('#history-suggestions-container .suggestion-card:has-text("特製肉じゃが") .add-suggested-dish-btn').click();
+    await page.waitForTimeout(200);
+    await page.selectOption('#target-copy-hist-day-select', 'fri');
+    await page.click('#confirm-copy-hist-btn');
+    await page.waitForTimeout(300);
+
+    const friAddedNikujaga = await page.locator('.dinner-card[data-day="fri"] .menu-title').allInnerTexts();
+    assertTest('Add Overdue Suggested Dish to Current Week Friday', friAddedNikujaga.join(' / ').includes('特製肉じゃが'), `Fri = ${friAddedNikujaga.join(' / ')}`);
+
+    // Switch history subtab back to archive so Section 10 starts cleanly
+    await page.click('[data-tab="history"]');
+    await page.waitForTimeout(150);
+    await page.click('.history-subtab[data-history-tab="archive"]');
+    await page.waitForTimeout(150);
+    await page.click('[data-tab="planner"]');
+    await page.waitForTimeout(200);
 
 
     // SECTION 10: EXHAUSTIVE ALL-CLICKABLE UI COMPONENTS CLICK TEST

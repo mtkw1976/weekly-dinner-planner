@@ -68,7 +68,7 @@ npm test
 
 ## 5. バージョン更新プロトコル
 
-機能追加やバグ修正に伴いバージョンを上げる場合、以下の **4箇所すべてを必ず同じバージョンに同期更新** すること（現在: `3.0.1`）。
+機能追加やバグ修正に伴いバージョンを上げる場合、以下の **4箇所すべてを必ず同じバージョンに同期更新** すること（現在: `3.1.0`）。
 
 1. `index.html` — ヘッダーの `<span class="version-badge">vX.Y.Z</span>`
 2. `sw.js` — `const CACHE_NAME = 'weekly-dinner-vX.Y.Z';`（PWA キャッシュ更新のため必須）
@@ -94,6 +94,7 @@ npm test
 - `test-runner.mjs` やブラウザからのデバッグが依存しているため、`app.js` で `window` に公開しているオブジェクト・関数を無断で削除・リネームしないこと：
   - `window.state`
   - `window.cloudDb`
+  - `window.computeDishAnalytics`
   - `window.renderApp`
   - `window.updateSyncStatusUI`
   - `window.formatBackupDisplayName`
